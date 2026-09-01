@@ -1,0 +1,17 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.runtime/
+*.py[cod]
+
+node_modules/
+.next/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+
+*.log
+.DS_Store
+Thumbs.db
