@@ -1,31 +1,35 @@
 "use client";
 
 import {
+  ArrowLeft,
   BookOpenText,
   Brush,
+  ChevronLeft,
+  ChevronRight,
   ClipboardPaste,
+  Check,
   Copy,
   CopyPlus,
   Eraser,
-  Languages,
-  LogOut,
+  ImagePlus,
+  MessageSquarePlus,
   MonitorUp,
-  Moon,
   MousePointer2,
   PenLine,
-  Settings,
+  SendHorizontal,
   Shapes,
   Sparkles,
   Spline,
   Star,
-  Sun,
   Sigma,
+  Scan,
   X,
 } from "lucide-react";
 import type Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import {
   PointerEvent as ReactPointerEvent,
+  type RefObject,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -44,9 +48,12 @@ import {
   Text as KonvaText,
 } from "react-konva";
 
+import { API_URL, apiHeaders, type CanvasRecord, type CanvasPage } from "@/lib/canvas-api";
+import { findSolutionSpace } from "@/lib/solution-placement";
+import { CANVAS_AI_TEXT } from "@/lib/canvas-ai-text";
+
 type Tool = "brush" | "eraser" | "select";
 type EraserMode = "normal" | "object";
-type AppTheme = "light" | "dark";
 type AppLanguage = "ru" | "en" | "zh";
 type Point = { x: number; y: number };
 type SelectionRect = { x: number; y: number; width: number; height: number };
@@ -54,13 +61,42 @@ type StageSize = { width: number; height: number };
 type ExportedImage = { dataUrl: string; width: number; height: number };
 type SceneClipboard = { elements: SceneElement[]; bounds: SelectionRect };
 type CanvasContextMenu = { x: number; y: number; point: Point };
-
+type SavedLatexFormula = { id: string; title: string; latex: string };
+type AiChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  image_data_url?: string | null;
+};
+type AiChat = { id: string; title: string; messages: AiChatMessage[] };
+type SidebarResizeState = { startX: number; startWidth: number };
 type StrokeElement = {
   id: string;
   kind: "stroke";
-  mode: "draw" | "erase";
+  mode: "draw";
   points: number[];
+  samples?: Array<{
+    x: number;
+    y: number;
+    timeOffset?: number | null;
+    size?: { width: number; height: number } | null;
+    opacity?: number | null;
+    force?: number | null;
+    azimuth?: number | null;
+    altitude?: number | null;
+    secondaryScale?: number | null;
+    threshold?: number | null;
+  }> | null;
   strokeWidth: number;
+  stroke?: string;
+  tool?: string | null;
+  transform?: { a: number; b: number; c: number; d: number; tx: number; ty: number } | null;
+  maskData?: string | null;
+  renderBounds?: { x: number; y: number; width: number; height: number } | null;
+  randomSeed?: number | null;
+  source?: "latex";
+  formulaInstanceId?: string;
+  latexTemplateId?: string;
 };
 type StarElement = {
   id: string;
@@ -78,7 +114,14 @@ type TextElement = {
   width: number;
   text: string;
   fontSize: number;
-  source?: "complex-integral";
+  height?: number;
+  fill?: string;
+  fontFamily?: string;
+  lineHeight?: number;
+  rotation?: number;
+  source?: "latex";
+  formulaInstanceId?: string;
+  latexTemplateId?: string;
 };
 type ImageElement = {
   id: string;
@@ -88,6 +131,24 @@ type ImageElement = {
   width: number;
   height: number;
   dataUrl: string;
+  source?: "latex" | "ai-chart";
+  latex?: string;
+  formulaInstanceId?: string;
+  solutionId?: string;
+  latexTemplateId?: string;
+};
+
+type AiSolutionResponse = {
+  status: "solution" | "clarification";
+  explanation: string;
+  steps: Array<{ latex: string; explanation: string; chart?: { bars: { label: string; value: number }[]; x_label: string; y_label: string } | null }>;
+};
+type CanvasSolution = {
+  id: string;
+  chatId: string;
+  pages: CanvasPage[];
+  pieces: Array<{ element: ImageElement; pageIndex: number; stepIndex: number }>;
+  response: AiSolutionResponse;
 };
 type SavedCardElement = {
   id: string;
@@ -100,12 +161,24 @@ type SavedCardElement = {
 };
 type SceneElement = StrokeElement | StarElement | TextElement | ImageElement | SavedCardElement;
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const PAGE_WIDTH = 794;
 const PAGE_HEIGHT = 1123;
 const MIN_SELECTION_SIZE = 3;
 const STROKE_ERASER_RADIUS = 13;
 const ERASER_LONG_PRESS_MS = 500;
+const SAVED_LATEX_KEY = "canvas_saved_latex_formulas";
+const LARGE_OPERATOR_FONT = '"KaTeX_Size2", "Cambria Math", "STIX Two Math", serif';
+const LARGE_OPERATOR_SYMBOLS = new Set(["∫", "∮", "∬", "∭", "∑", "∏"]);
+const LATEX_EXAMPLES = [
+  {
+    id: "latex-example-double-integral",
+    latex: String.raw`\int_0^1 \int_0^{\sqrt{1-x^2}} (x^2+y^2)e^{x+y}\,dy\,dx`,
+  },
+  {
+    id: "latex-example-quadratic",
+    latex: String.raw`x_{1,2}=\frac{-b\pm\sqrt{b^2-4ac}}{2a}`,
+  },
+] as const;
 
 const tools: Array<{ id: Tool; Icon: typeof Brush }> = [
   { id: "brush", Icon: Brush },
@@ -113,32 +186,27 @@ const tools: Array<{ id: Tool; Icon: typeof Brush }> = [
   { id: "select", Icon: MousePointer2 },
 ];
 
-const fakeSolutions: Record<AppLanguage, string[]> = {
-  ru: [
-    "Решение\n3x + 7 = 25\n3x = 18\nx = 6\nОтвет: 6",
-    "Решение\nS = a · h / 2\nS = 12 · 7 / 2\nS = 42 см²\nОтвет: 42 см²",
-    "Решение\nv = s / t\nv = 180 / 3\nv = 60 км/ч\nОтвет: 60 км/ч",
-    "Решение\n2(x − 4) = 14\nx − 4 = 7\nx = 11\nОтвет: 11",
-  ],
-  en: [
-    "Solution\n3x + 7 = 25\n3x = 18\nx = 6\nAnswer: 6",
-    "Solution\nS = a · h / 2\nS = 12 · 7 / 2\nS = 42 cm²\nAnswer: 42 cm²",
-    "Solution\nv = s / t\nv = 180 / 3\nv = 60 km/h\nAnswer: 60 km/h",
-    "Solution\n2(x − 4) = 14\nx − 4 = 7\nx = 11\nAnswer: 11",
-  ],
-  zh: [
-    "解答\n3x + 7 = 25\n3x = 18\nx = 6\n答案：6",
-    "解答\nS = a · h / 2\nS = 12 · 7 / 2\nS = 42 cm²\n答案：42 cm²",
-    "解答\nv = s / t\nv = 180 / 3\nv = 60 km/h\n答案：60 km/h",
-    "解答\n2(x − 4) = 14\nx − 4 = 7\nx = 11\n答案：11",
-  ],
-};
+function replaceStrokePoints(stroke: StrokeElement, points: number[], id = stroke.id): StrokeElement {
+  const next = { ...stroke, id, points };
+  delete next.samples;
+  delete next.transform;
+  delete next.maskData;
+  delete next.renderBounds;
+  delete next.randomSeed;
+  return next;
+}
 
 const UI_TEXT = {
   ru: {
     brush: "Кисть",
     eraser: "Ластик",
     select: "Выделение",
+    addPhoto: "Добавить фото (PNG, JPEG, JPG)",
+    photoLoading: "Загрузка фото…",
+    photoInvalid: "Выберите изображение PNG, JPEG или JPG.",
+    photoTooLarge: "Размер фото не должен превышать 20 МБ.",
+    photoFailed: "Не удалось открыть фото. Попробуйте другой файл.",
+    elementBounds: "Границы элементов",
     normalMode: "обычный режим",
     objectMode: "объектный режим",
     eraserHint: "Ластик — удерживайте для выбора режима",
@@ -153,6 +221,17 @@ const UI_TEXT = {
     summary: "Конспект 2.3",
     addIntegral: "Добавить сложный интеграл",
     complexIntegral: "Сложный интеграл",
+    addQuadratic: "Добавить формулу корней квадратного уравнения",
+    quadraticFormula: "Квадратное уравнение",
+    latexTool: "Добавить LaTeX-формулу",
+    latexModalTitle: "Новая LaTeX-формула",
+    latexPlaceholder: "Вставьте LaTeX, например: \\frac{a}{b}",
+    latexPreview: "Предпросмотр",
+    latexEmptyPreview: "Формула появится здесь",
+    invalidLatex: "Ошибка LaTeX",
+    addToShapes: "Добавить в фигуры",
+    cancel: "Отмена",
+    customFormulas: "Пользовательские формулы",
     settings: "Настройки",
     selectionActions: "Действия с выделением",
     ai1Aria: "ИИ 1 — показать решение в сайдбаре",
@@ -166,11 +245,30 @@ const UI_TEXT = {
     sendAria: "Отправить выделение на Windows",
     send: "Отправить на Windows",
     ai: "ИИ",
+    openAi: "Открыть ИИ-сайдбар",
     closeAi: "Закрыть ИИ-сайдбар",
     close: "Закрыть",
     processing: "Обработка",
     aiRequestFailed: "Не удалось получить ответ Qwen. Повторите попытку.",
+    chats: "Чаты",
+    newChat: "Новый чат",
+    emptyChat: "Выделите область и выберите ИИ 1, чтобы начать решение.",
+    inputPlaceholder: "Напишите сообщение…",
+    sendMessage: "Отправить сообщение",
+    selectedArea: "Выделенная область",
+    removeAttachment: "Убрать изображение",
+    imagePrompt: "Реши математическую задачу",
+    copyResponse: "Копировать ответ",
+    goodResponse: "Хороший ответ",
+    badResponse: "Плохой ответ",
+    retryResponse: "Повторить ответ",
+    moreActions: "Ещё действия",
+    resizeSidebar: "Изменить ширину ИИ-сайдбара",
     canvasActions: "Действия с канвасом",
+    backToCanvases: "К канвасам",
+    saving: "Сохранение…",
+    saved: "Сохранено",
+    saveFailed: "Не сохранено",
     paste: "Вставить",
     closeSettings: "Закрыть настройки",
     theme: "Тема",
@@ -183,6 +281,12 @@ const UI_TEXT = {
     brush: "Brush",
     eraser: "Eraser",
     select: "Select",
+    addPhoto: "Add photo (PNG, JPEG, JPG)",
+    photoLoading: "Loading photo…",
+    photoInvalid: "Choose a PNG, JPEG or JPG image.",
+    photoTooLarge: "The photo must be no larger than 20 MB.",
+    photoFailed: "Could not open the photo. Try another file.",
+    elementBounds: "Element bounds",
     normalMode: "normal mode",
     objectMode: "object mode",
     eraserHint: "Eraser — press and hold to choose a mode",
@@ -197,6 +301,17 @@ const UI_TEXT = {
     summary: "Notes 2.3",
     addIntegral: "Add a complex integral",
     complexIntegral: "Complex integral",
+    addQuadratic: "Add the quadratic formula",
+    quadraticFormula: "Quadratic formula",
+    latexTool: "Add a LaTeX formula",
+    latexModalTitle: "New LaTeX formula",
+    latexPlaceholder: "Paste LaTeX, for example: \\frac{a}{b}",
+    latexPreview: "Preview",
+    latexEmptyPreview: "The formula will appear here",
+    invalidLatex: "LaTeX error",
+    addToShapes: "Add to shapes",
+    cancel: "Cancel",
+    customFormulas: "Custom formulas",
     settings: "Settings",
     selectionActions: "Selection actions",
     ai1Aria: "AI 1 — show the solution in the sidebar",
@@ -210,11 +325,30 @@ const UI_TEXT = {
     sendAria: "Send selection to Windows",
     send: "Send to Windows",
     ai: "AI",
+    openAi: "Open AI sidebar",
     closeAi: "Close AI sidebar",
     close: "Close",
     processing: "Processing",
     aiRequestFailed: "Could not get a response from Qwen. Please try again.",
+    chats: "Chats",
+    newChat: "New chat",
+    emptyChat: "Select an area and choose AI 1 to start a solution.",
+    inputPlaceholder: "Write a message…",
+    sendMessage: "Send message",
+    selectedArea: "Selected area",
+    removeAttachment: "Remove image",
+    imagePrompt: "Solve the math problem",
+    copyResponse: "Copy response",
+    goodResponse: "Good response",
+    badResponse: "Bad response",
+    retryResponse: "Retry response",
+    moreActions: "More actions",
+    resizeSidebar: "Resize AI sidebar",
     canvasActions: "Canvas actions",
+    backToCanvases: "Back to canvases",
+    saving: "Saving…",
+    saved: "Saved",
+    saveFailed: "Not saved",
     paste: "Paste",
     closeSettings: "Close settings",
     theme: "Theme",
@@ -227,6 +361,12 @@ const UI_TEXT = {
     brush: "画笔",
     eraser: "橡皮擦",
     select: "选择",
+    addPhoto: "添加照片（PNG、JPEG、JPG）",
+    photoLoading: "正在加载照片…",
+    photoInvalid: "请选择 PNG、JPEG 或 JPG 图片。",
+    photoTooLarge: "照片大小不能超过 20 MB。",
+    photoFailed: "无法打开照片，请尝试其他文件。",
+    elementBounds: "元素边界",
     normalMode: "普通模式",
     objectMode: "对象模式",
     eraserHint: "长按橡皮擦以选择模式",
@@ -241,6 +381,17 @@ const UI_TEXT = {
     summary: "笔记 2.3",
     addIntegral: "添加复杂积分",
     complexIntegral: "复杂积分",
+    addQuadratic: "添加一元二次方程求根公式",
+    quadraticFormula: "一元二次方程求根公式",
+    latexTool: "添加 LaTeX 公式",
+    latexModalTitle: "新建 LaTeX 公式",
+    latexPlaceholder: "粘贴 LaTeX，例如：\\frac{a}{b}",
+    latexPreview: "预览",
+    latexEmptyPreview: "公式将在这里显示",
+    invalidLatex: "LaTeX 错误",
+    addToShapes: "添加到图形",
+    cancel: "取消",
+    customFormulas: "自定义公式",
     settings: "设置",
     selectionActions: "所选对象操作",
     ai1Aria: "AI 1 — 在侧边栏显示解答",
@@ -254,11 +405,30 @@ const UI_TEXT = {
     sendAria: "将所选区域发送到 Windows",
     send: "发送到 Windows",
     ai: "AI",
+    openAi: "打开 AI 侧边栏",
     closeAi: "关闭 AI 侧边栏",
     close: "关闭",
     processing: "处理中",
     aiRequestFailed: "无法获取 Qwen 的回复，请重试。",
+    chats: "聊天",
+    newChat: "新建聊天",
+    emptyChat: "选择一个区域，然后点击 AI 1 开始解答。",
+    inputPlaceholder: "输入消息…",
+    sendMessage: "发送消息",
+    selectedArea: "所选区域",
+    removeAttachment: "移除图片",
+    imagePrompt: "解答这道数学题",
+    copyResponse: "复制回答",
+    goodResponse: "好的回答",
+    badResponse: "不好的回答",
+    retryResponse: "重新生成回答",
+    moreActions: "更多操作",
+    resizeSidebar: "调整 AI 侧边栏宽度",
     canvasActions: "画布操作",
+    backToCanvases: "返回画布列表",
+    saving: "正在保存…",
+    saved: "已保存",
+    saveFailed: "未保存",
     paste: "粘贴",
     closeSettings: "关闭设置",
     theme: "主题",
@@ -279,6 +449,10 @@ function createId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
+function mathFontFamily(text: string, fallback: string): string {
+  return LARGE_OPERATOR_SYMBOLS.has(text) ? LARGE_OPERATOR_FONT : fallback;
+}
+
 function normalizeRect(start: Point, end: Point): SelectionRect {
   return {
     x: Math.min(start.x, end.x),
@@ -286,42 +460,6 @@ function normalizeRect(start: Point, end: Point): SelectionRect {
     width: Math.abs(end.x - start.x),
     height: Math.abs(end.y - start.y),
   };
-}
-
-function randomSolution(language: AppLanguage): string {
-  const solutions = fakeSolutions[language];
-  return solutions[Math.floor(Math.random() * solutions.length)];
-}
-
-const COMPLEX_INTEGRAL_PARTS: Array<Omit<TextElement, "id" | "kind" | "source">> = [
-  { x: 48, y: 404, width: 72, text: "∫", fontSize: 112 },
-  { x: 78, y: 376, width: 28, text: "1", fontSize: 24 },
-  { x: 58, y: 512, width: 28, text: "0", fontSize: 24 },
-  { x: 124, y: 404, width: 72, text: "∫", fontSize: 112 },
-  { x: 154, y: 370, width: 142, text: "√(1−x²)", fontSize: 24 },
-  { x: 134, y: 512, width: 28, text: "0", fontSize: 24 },
-  { x: 254, y: 449, width: 26, text: "(", fontSize: 48 },
-  { x: 281, y: 450, width: 60, text: "x²", fontSize: 46 },
-  { x: 342, y: 450, width: 38, text: "+", fontSize: 44 },
-  { x: 382, y: 451, width: 60, text: "y²", fontSize: 46 },
-  { x: 443, y: 449, width: 26, text: ")", fontSize: 48 },
-  { x: 476, y: 450, width: 38, text: "e", fontSize: 46 },
-  { x: 509, y: 426, width: 72, text: "x+y", fontSize: 24 },
-  { x: 584, y: 453, width: 34, text: "d", fontSize: 42 },
-  { x: 617, y: 453, width: 34, text: "y", fontSize: 42 },
-  { x: 663, y: 454, width: 34, text: "d", fontSize: 42 },
-  { x: 696, y: 454, width: 34, text: "x", fontSize: 42 },
-];
-
-function createComplexIntegralElements(offset: number): TextElement[] {
-  return COMPLEX_INTEGRAL_PARTS.map((part) => ({
-    ...part,
-    id: createId(),
-    kind: "text",
-    source: "complex-integral",
-    x: part.x + offset,
-    y: part.y + offset,
-  }));
 }
 
 function distanceToSegment(point: Point, start: Point, end: Point): number {
@@ -348,6 +486,65 @@ function strokeTouchesPoint(stroke: StrokeElement, point: Point): boolean {
   return false;
 }
 
+function polylineLength(points: Point[]): number {
+  let length = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    length += Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y);
+  }
+  return length;
+}
+
+function splitStrokeByEraser(stroke: StrokeElement, eraserStart: Point, eraserEnd: Point): StrokeElement[] {
+  if (stroke.points.length < 4) return [];
+  const sourcePoints: Point[] = [];
+  for (let index = 0; index <= stroke.points.length - 2; index += 2) {
+    sourcePoints.push({ x: stroke.points[index], y: stroke.points[index + 1] });
+  }
+
+  const sampleSpacing = 2;
+  const samples: Point[] = [];
+  for (let index = 0; index < sourcePoints.length - 1; index += 1) {
+    const start = sourcePoints[index];
+    const end = sourcePoints[index + 1];
+    const segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
+    const steps = Math.max(1, Math.ceil(segmentLength / sampleSpacing));
+    for (let step = index === 0 ? 0 : 1; step <= steps; step += 1) {
+      const progress = step / steps;
+      samples.push({
+        x: start.x + (end.x - start.x) * progress,
+        y: start.y + (end.y - start.y) * progress,
+      });
+    }
+  }
+
+  const radius = STROKE_ERASER_RADIUS + stroke.strokeWidth / 2;
+  const erased = samples.map((point) => distanceToSegment(point, eraserStart, eraserEnd) <= radius);
+  if (!erased.some(Boolean)) return [stroke];
+
+  const fragments: Point[][] = [];
+  let fragment: Point[] = [];
+  for (let index = 0; index < samples.length; index += 1) {
+    if (!erased[index]) {
+      fragment.push(samples[index]);
+      continue;
+    }
+    if (fragment.length) fragments.push(fragment);
+    fragment = [];
+  }
+  if (fragment.length) fragments.push(fragment);
+
+  const minimumLength = Math.max(1, stroke.strokeWidth * 0.5);
+  return fragments
+    .filter((points) => points.length >= 2 && polylineLength(points) >= minimumLength)
+    .map((points, index) =>
+      replaceStrokePoints(
+        stroke,
+        points.flatMap((point) => [point.x, point.y]),
+        index === 0 ? stroke.id : createId(),
+      ),
+    );
+}
+
 function sceneElementBounds(element: SceneElement): SelectionRect | null {
   if (element.kind === "stroke") {
     if (element.points.length < 2) return null;
@@ -369,6 +566,9 @@ function sceneElementBounds(element: SceneElement): SelectionRect | null {
     };
   }
   if (element.kind === "text") {
+    if (element.height !== undefined) {
+      return { x: element.x, y: element.y, width: element.width, height: element.height };
+    }
     const charactersPerLine = Math.max(1, Math.floor(element.width / (element.fontSize * 0.56)));
     const lineCount = element.text
       .split("\n")
@@ -423,10 +623,10 @@ function boundsForElements(elements: SceneElement[], ids: string[]): SelectionRe
 function moveSceneElement(element: SceneElement, selected: Set<string>, dx: number, dy: number): SceneElement {
   if (!selected.has(element.id)) return element;
   if (element.kind === "stroke") {
-    return {
-      ...element,
-      points: element.points.map((coordinate, index) => coordinate + (index % 2 === 0 ? dx : dy)),
-    };
+    return replaceStrokePoints(
+      element,
+      element.points.map((coordinate, index) => coordinate + (index % 2 === 0 ? dx : dy)),
+    );
   }
   return { ...element, x: element.x + dx, y: element.y + dy };
 }
@@ -437,11 +637,11 @@ function snapshotSceneElement(element: SceneElement): SceneElement {
 
 function cloneSceneElement(element: SceneElement, dx: number, dy: number): SceneElement {
   if (element.kind === "stroke") {
-    return {
-      ...element,
-      id: createId(),
-      points: element.points.map((coordinate, index) => coordinate + (index % 2 === 0 ? dx : dy)),
-    };
+    return replaceStrokePoints(
+      element,
+      element.points.map((coordinate, index) => coordinate + (index % 2 === 0 ? dx : dy)),
+      createId(),
+    );
   }
   return { ...element, id: createId(), x: element.x + dx, y: element.y + dy };
 }
@@ -461,6 +661,50 @@ function selectionHandles(rect: SelectionRect): Point[] {
     { x: rect.x, y: rect.y + rect.height },
     { x: rect.x + rect.width, y: rect.y + rect.height },
   ];
+}
+
+function ElementBoundsOverlay({ sceneLayerRef }: { sceneLayerRef: RefObject<Konva.Layer | null> }) {
+  const [bounds, setBounds] = useState<SelectionRect[]>([]);
+
+  useLayoutEffect(() => {
+    const layer = sceneLayerRef.current;
+    if (!layer) return;
+    const updateBounds = () => {
+      const next = layer.getChildren().map((node) => node.getClientRect({ relativeTo: layer }));
+      setBounds((previous) =>
+        previous.length === next.length &&
+        previous.every((rect, index) =>
+          rect.x === next[index].x &&
+          rect.y === next[index].y &&
+          rect.width === next[index].width &&
+          rect.height === next[index].height,
+        )
+          ? previous
+          : next,
+      );
+    };
+    updateBounds();
+    // Follow actual rendering, including images that finish loading after the elements change.
+    layer.on("draw.elementBounds", updateBounds);
+    return () => {
+      layer.off("draw.elementBounds", updateBounds);
+    };
+  }, [sceneLayerRef]);
+
+  return (
+    <Group listening={false} name="element-bounds">
+      {bounds.map((rect, index) => (
+        <KonvaRect
+          {...rect}
+          key={index}
+          listening={false}
+          stroke="rgba(37, 99, 235, 0.45)"
+          strokeScaleEnabled={false}
+          strokeWidth={1}
+        />
+      ))}
+    </Group>
+  );
 }
 
 function SceneImage({ element }: { element: ImageElement }) {
@@ -860,39 +1104,55 @@ function SavedCard({ element }: { element: SavedCardElement }) {
 }
 
 export function KonvaDrawingCanvas({
-  appTheme,
+  canvas,
   language,
-  onLanguageChange,
+  onBack,
   onLogout,
-  onThemeChange,
   token,
 }: {
-  appTheme: AppTheme;
+  canvas: CanvasRecord;
   language: AppLanguage;
-  onLanguageChange: (language: AppLanguage) => void;
+  onBack: () => void;
   onLogout: () => void;
-  onThemeChange: (theme: AppTheme) => void;
   token: string;
 }) {
   const workspaceRef = useRef<HTMLElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const photoRequestRef = useRef(0);
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const [photoError, setPhotoError] = useState<"photoInvalid" | "photoTooLarge" | "photoFailed" | null>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
   const selectionLayerRef = useRef<Konva.Layer | null>(null);
+  const sceneLayerRef = useRef<Konva.Layer | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
   const drawingRef = useRef(false);
   const startRef = useRef<Point | null>(null);
   const draggingSelectionRef = useRef(false);
   const lastDragPointRef = useRef<Point | null>(null);
+  const lastEraserPointRef = useRef<Point | null>(null);
   const activeStrokeIdRef = useRef<string | null>(null);
   const sceneClipboardRef = useRef<SceneClipboard | null>(null);
   const selectionRef = useRef<SelectionRect | null>(null);
   const sidebarRequestRef = useRef<AbortController | null>(null);
-  const sidebarTypingRef = useRef<number | null>(null);
-  const canvasDelayRef = useRef<number | null>(null);
-  const canvasTypingRef = useRef<number | null>(null);
+  const aiAnimationRef = useRef<number | null>(null);
+  const sidebarResizeRef = useRef<SidebarResizeState | null>(null);
+  const canvasSaveTimerRef = useRef<number | null>(null);
+  const canvasPagesRef = useRef(canvas.content.pages);
+  const activePageIndexRef = useRef(0);
+  const initialPage = canvas.content.pages[0];
+  const elementsRef = useRef<SceneElement[]>(initialPage.elements as SceneElement[]);
+  const savedSnapshotRef = useRef(JSON.stringify(canvas.content.pages));
+  const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const eraserPressTimerRef = useRef<number | null>(null);
   const eraserLongPressTriggeredRef = useRef(false);
   const [stageSize, setStageSize] = useState<StageSize>({ width: 0, height: 0 });
-  const [elements, setElements] = useState<SceneElement[]>([]);
+  const [activePageIndex, setActivePageIndex] = useState(0);
+  const [elements, setElements] = useState<SceneElement[]>(
+    () => initialPage.elements as SceneElement[],
+  );
+  const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [tool, setTool] = useState<Tool>("brush");
+  const [showElementBounds, setShowElementBounds] = useState(false);
   const [eraserMode, setEraserMode] = useState<EraserMode>("normal");
   const [eraserMenuOpen, setEraserMenuOpen] = useState(false);
   const [selection, setSelection] = useState<SelectionRect | null>(null);
@@ -900,13 +1160,275 @@ export function KonvaDrawingCanvas({
   const [clipboardReady, setClipboardReady] = useState(false);
   const [contextMenu, setContextMenu] = useState<CanvasContextMenu | null>(null);
   const [sending, setSending] = useState(false);
-  const [sidebarText, setSidebarText] = useState("");
   const [sidebarBusy, setSidebarBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [canvasAiBusy, setCanvasAiBusy] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(420);
+  const [aiChats, setAiChats] = useState<AiChat[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [aiDraft, setAiDraft] = useState("");
+  const [pendingAiImage, setPendingAiImage] = useState<ExportedImage | null>(null);
+  const [loadingChatId, setLoadingChatId] = useState<string | null>(null);
+  const [solution, setSolution] = useState<CanvasSolution | null>(null);
+  const [draftPageIndex, setDraftPageIndex] = useState(0);
+  const [inkProgress, setInkProgress] = useState({ step: 0, progress: 0 });
+  const [aiError, setAiError] = useState<string | null>(null);
+  const aiSubmitRef = useRef(false);
+  const taskContextRef = useRef(new Map<string, { pageId: string; bounds?: SelectionRect }>());
+  const pendingTaskRef = useRef<{ pageId: string; bounds: SelectionRect } | null>(null);
+  const canvasAiBusy = sidebarBusy || Boolean(solution);
+  const [latexLayoutBusy, setLatexLayoutBusy] = useState(false);
   const [shapesOpen, setShapesOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const text = UI_TEXT[language];
+  const [latexModalOpen, setLatexModalOpen] = useState(false);
+  const [latexDraft, setLatexDraft] = useState("");
+  const [savedLatexFormulas, setSavedLatexFormulas] = useState<SavedLatexFormula[]>([]);
+  const [latexPreview, setLatexPreview] = useState<{
+    layout: ExportedImage | null;
+    error: string | null;
+    loading: boolean;
+  }>({ layout: null, error: null, loading: false });
+  const text = { ...UI_TEXT[language], ...CANVAS_AI_TEXT[language] };
+  const activeChat = aiChats.find((chat) => chat.id === activeChatId) ?? null;
+  const visiblePageIndex = solution ? draftPageIndex : activePageIndex;
+  const visiblePages = solution?.pages ?? canvasPagesRef.current;
+  const visibleElements = solution ? solution.pages[draftPageIndex].elements as SceneElement[] : elements;
+
+  useEffect(() => {
+    const chat = chatScrollRef.current;
+    if (chat) chat.scrollTop = chat.scrollHeight;
+  }, [activeChat?.messages, sidebarOpen]);
+
+  useEffect(() => () => { photoRequestRef.current += 1; }, []);
+
+  const addPhoto = async (file: File) => {
+    const request = ++photoRequestRef.current;
+    const pageIndex = activePageIndexRef.current;
+    setPhotoError(null);
+    if (file.size > 20 * 1024 * 1024) {
+      setPhotoError("photoTooLarge");
+      return;
+    }
+    setPhotoLoading(true);
+    try {
+      const header = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+      const isPng = [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => header[index] === byte);
+      const isJpeg = header[0] === 255 && header[1] === 216 && header[2] === 255;
+      if (!isPng && !isJpeg) {
+        if (request === photoRequestRef.current) setPhotoError("photoInvalid");
+        return;
+      }
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.onabort = () => reject(new Error("photo-read-aborted"));
+        reader.readAsDataURL(new Blob([file], { type: isPng ? "image/png" : "image/jpeg" }));
+      });
+      const photo = new window.Image();
+      photo.src = dataUrl;
+      await photo.decode();
+      if (!photo.naturalWidth || !photo.naturalHeight) throw new Error("empty-photo");
+      if (request !== photoRequestRef.current || pageIndex !== activePageIndexRef.current) return;
+      const scale = Math.min(1, (PAGE_WIDTH - 80) / photo.naturalWidth, (PAGE_HEIGHT - 80) / photo.naturalHeight);
+      const width = photo.naturalWidth * scale;
+      const height = photo.naturalHeight * scale;
+      const bounds = { x: (PAGE_WIDTH - width) / 2, y: (PAGE_HEIGHT - height) / 2, width, height };
+      const element: ImageElement = { id: createId(), kind: "image", ...bounds, dataUrl };
+      setElements((current) => [...current, element]);
+      setTool("select");
+      setSelectedIds([element.id]);
+      selectionRef.current = bounds;
+      setSelection(bounds);
+      setShapesOpen(false);
+      setEraserMenuOpen(false);
+      setContextMenu(null);
+    } catch {
+      if (request === photoRequestRef.current) setPhotoError("photoFailed");
+    } finally {
+      if (request === photoRequestRef.current) setPhotoLoading(false);
+    }
+  };
+
+  const queueCanvasSave = useCallback((): Promise<boolean> => {
+    const snapshotElements = elementsRef.current;
+    const snapshotPages = canvasPagesRef.current.map((page, index) =>
+      index === activePageIndexRef.current
+        ? {
+            ...page,
+            width: PAGE_WIDTH,
+            height: PAGE_HEIGHT,
+            elements: snapshotElements,
+            appleDrawingData: page.elements === snapshotElements ? page.appleDrawingData : undefined,
+          }
+        : page,
+    );
+    canvasPagesRef.current = snapshotPages;
+    const serialized = JSON.stringify(snapshotPages);
+    const save = async (): Promise<boolean> => {
+      if (serialized === savedSnapshotRef.current) {
+        if (JSON.stringify(canvasPagesRef.current) === serialized) setSaveState("saved");
+        return true;
+      }
+      setSaveState("saving");
+      try {
+        const response = await fetch(`${API_URL}/api/canvases/${canvas.id}`, {
+          method: "PATCH",
+          headers: apiHeaders(token, true),
+          body: JSON.stringify({
+            content: {
+              schemaVersion: 2,
+              pages: snapshotPages,
+            },
+          }),
+        });
+        if (response.status === 401 || response.status === 403) {
+          onLogout();
+          return false;
+        }
+        if (!response.ok) throw new Error("canvas-save-failed");
+        savedSnapshotRef.current = serialized;
+        setSaveState(JSON.stringify(canvasPagesRef.current) === serialized ? "saved" : "saving");
+        return true;
+      } catch {
+        setSaveState("error");
+        return false;
+      }
+    };
+
+    const queued = saveQueueRef.current.catch(() => false).then(save);
+    saveQueueRef.current = queued;
+    return queued;
+  }, [canvas.id, onLogout, token]);
+
+  useEffect(() => {
+    elementsRef.current = elements;
+    canvasPagesRef.current = canvasPagesRef.current.map((page, index) =>
+      index === activePageIndexRef.current ? { ...page, elements,
+        appleDrawingData: page.elements === elements ? page.appleDrawingData : undefined } : page,
+    );
+    const serialized = JSON.stringify(canvasPagesRef.current);
+    if (serialized === savedSnapshotRef.current) return;
+    setSaveState("saving");
+    if (canvasSaveTimerRef.current !== null) {
+      window.clearTimeout(canvasSaveTimerRef.current);
+    }
+    canvasSaveTimerRef.current = window.setTimeout(() => {
+      canvasSaveTimerRef.current = null;
+      void queueCanvasSave();
+    }, 700);
+    return () => {
+      if (canvasSaveTimerRef.current !== null) {
+        window.clearTimeout(canvasSaveTimerRef.current);
+        canvasSaveTimerRef.current = null;
+      }
+    };
+  }, [elements, queueCanvasSave]);
+
+  useEffect(() => {
+    const saveWhenHidden = () => {
+      if (document.visibilityState !== "hidden") return;
+      if (canvasSaveTimerRef.current !== null) {
+        window.clearTimeout(canvasSaveTimerRef.current);
+        canvasSaveTimerRef.current = null;
+      }
+      void queueCanvasSave();
+    };
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      if (!solution && !sidebarBusy && JSON.stringify(canvasPagesRef.current) === savedSnapshotRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    document.addEventListener("visibilitychange", saveWhenHidden);
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => {
+      document.removeEventListener("visibilitychange", saveWhenHidden);
+      window.removeEventListener("beforeunload", warnBeforeLeaving);
+    };
+  }, [queueCanvasSave, sidebarBusy, solution]);
+
+  const returnToCanvases = useCallback(async () => {
+    if (photoLoading || canvasAiBusy) return;
+    if (canvasSaveTimerRef.current !== null) {
+      window.clearTimeout(canvasSaveTimerRef.current);
+      canvasSaveTimerRef.current = null;
+    }
+    if (await queueCanvasSave()) onBack();
+  }, [canvasAiBusy, onBack, photoLoading, queueCanvasSave]);
+
+  const openPage = useCallback(
+    async (nextIndex: number) => {
+      if (solution) {
+        if (nextIndex >= 0 && nextIndex < solution.pages.length) setDraftPageIndex(nextIndex);
+        return;
+      }
+      if (sidebarBusy) return;
+      if (photoLoading) return;
+      if (nextIndex < 0 || nextIndex >= canvasPagesRef.current.length) return;
+      if (canvasSaveTimerRef.current !== null) {
+        window.clearTimeout(canvasSaveTimerRef.current);
+        canvasSaveTimerRef.current = null;
+      }
+      if (!(await queueCanvasSave())) return;
+      const nextPage = canvasPagesRef.current[nextIndex];
+      activePageIndexRef.current = nextIndex;
+      elementsRef.current = nextPage.elements as SceneElement[];
+      setElements(nextPage.elements as SceneElement[]);
+      setActivePageIndex(nextIndex);
+      setSelectedIds([]);
+      selectionRef.current = null;
+      setSelection(null);
+    },
+    [photoLoading, queueCanvasSave, sidebarBusy, solution],
+  );
+
+  const requestLatexLayout = useCallback(async (
+    latex: string, options: { maxWidth?: number; maxHeight?: number } = {}, signal?: AbortSignal,
+  ): Promise<ExportedImage> => {
+    const { renderLatexImage } = await import("@/lib/latex-image");
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const image = await renderLatexImage(latex, 38, options.maxWidth ?? 690);
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    return image;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      document.fonts.load('44px "KaTeX_Size2"', "∫"),
+      document.fonts.ready,
+    ]).then(() => {
+      if (cancelled) return;
+      stageRef.current?.batchDraw();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const latex = latexDraft.trim();
+    if (!latex) {
+      setLatexPreview({ layout: null, error: null, loading: false });
+      return;
+    }
+    const controller = new AbortController();
+    setLatexPreview({ layout: null, error: null, loading: true });
+    const timer = window.setTimeout(() => {
+      void requestLatexLayout(latex, {}, controller.signal)
+        .then((layout) => setLatexPreview({ layout, error: null, loading: false }))
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          setLatexPreview({
+            layout: null,
+            error: error instanceof Error ? error.message : "Invalid LaTeX",
+            loading: false,
+          });
+        });
+    }, 200);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [latexDraft, requestLatexLayout]);
 
   const scaleX = stageSize.width / PAGE_WIDTH || 1;
   const scaleY = stageSize.height / PAGE_HEIGHT || 1;
@@ -939,24 +1461,88 @@ export function KonvaDrawingCanvas({
   }, [selection]);
 
   useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(SAVED_LATEX_KEY) ?? "[]") as unknown;
+      if (!Array.isArray(stored)) return;
+      setSavedLatexFormulas(
+        stored.filter(
+          (item): item is SavedLatexFormula =>
+            typeof item === "object" &&
+            item !== null &&
+            typeof (item as SavedLatexFormula).id === "string" &&
+            typeof (item as SavedLatexFormula).title === "string" &&
+            typeof (item as SavedLatexFormula).latex === "string",
+        ),
+      );
+    } catch {
+      localStorage.removeItem(SAVED_LATEX_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`${API_URL}/api/ai/chats`, {
+      headers: apiHeaders(token),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (response.status === 401 || response.status === 403) {
+          onLogout();
+          return null;
+        }
+        if (!response.ok) throw new Error("chat-history-request-failed");
+        return (await response.json()) as AiChat[];
+      })
+      .then((chats) => {
+        if (!chats?.length) return;
+        setAiChats((current) => {
+          const currentIds = new Set(current.map((chat) => chat.id));
+          return [...chats.filter((chat) => !currentIds.has(chat.id)), ...current];
+        });
+        setActiveChatId((current) => current ?? chats[0].id);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      });
+    return () => controller.abort();
+  }, [onLogout, token]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setSettingsOpen(false);
         setEraserMenuOpen(false);
         setShapesOpen(false);
         setContextMenu(null);
+        setLatexModalOpen(false);
+        setLatexDraft("");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      const resize = sidebarResizeRef.current;
+      if (!resize) return;
+      const nextWidth = Math.max(320, Math.min(720, resize.startWidth + resize.startX - event.clientX));
+      setSidebarWidth(nextWidth);
+    };
+    const finishResize = () => {
+      sidebarResizeRef.current = null;
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", finishResize);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", finishResize);
+    };
+  }, []);
+
   useEffect(
     () => () => {
       sidebarRequestRef.current?.abort();
-      if (sidebarTypingRef.current !== null) window.clearInterval(sidebarTypingRef.current);
-      if (canvasDelayRef.current !== null) window.clearTimeout(canvasDelayRef.current);
-      if (canvasTypingRef.current !== null) window.clearInterval(canvasTypingRef.current);
+      if (aiAnimationRef.current !== null) window.cancelAnimationFrame(aiAnimationRef.current);
       if (eraserPressTimerRef.current !== null) window.clearTimeout(eraserPressTimerRef.current);
     },
     [],
@@ -987,6 +1573,14 @@ export function KonvaDrawingCanvas({
       }
       return candidateId ? current.filter((element) => element.id !== candidateId) : current;
     });
+  }, []);
+
+  const eraseStrokesAlong = useCallback((start: Point, end: Point) => {
+    setElements((current) =>
+      current.flatMap((element): SceneElement[] =>
+        element.kind === "stroke" ? splitStrokeByEraser(element, start, end) : [element],
+      ),
+    );
   }, []);
 
   const exportSelection = useCallback(
@@ -1025,10 +1619,10 @@ export function KonvaDrawingCanvas({
         data.append("height", String(Math.max(1, Math.round(rect.height * scaleY * (window.devicePixelRatio || 1)))));
         const response = await fetch(`${API_URL}/api/images`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
+          headers: apiHeaders(token),
           body: data,
         });
-        if (response.status === 401) onLogout();
+        if (response.status === 401 || response.status === 403) onLogout();
       } finally {
         setSending(false);
         setSelection(null);
@@ -1037,94 +1631,275 @@ export function KonvaDrawingCanvas({
     [exportSelection, onLogout, scaleX, scaleY, token],
   );
 
-  const runSidebarAi = useCallback(async (selectionImage: ExportedImage) => {
+  const persistChatMessage = useCallback(
+    async (
+      chatId: string,
+      role: AiChatMessage["role"],
+      content: string,
+      imageDataUrl?: string,
+    ): Promise<AiChatMessage | null> => {
+      try {
+        const response = await fetch(`${API_URL}/api/ai/chats/${chatId}/messages`, {
+          method: "POST",
+          headers: apiHeaders(token, true),
+          body: JSON.stringify({ role, content, image_data_url: imageDataUrl ?? null }),
+        });
+        if (response.status === 401 || response.status === 403) {
+          onLogout();
+          return null;
+        }
+        if (!response.ok) return null;
+        return (await response.json()) as AiChatMessage;
+      } catch {
+        return null;
+      }
+    },
+    [onLogout, token],
+  );
+
+  const createNewChat = useCallback(async (): Promise<string | null> => {
+    try {
+      const response = await fetch(`${API_URL}/api/ai/chats`, {
+        method: "POST",
+        headers: apiHeaders(token, true),
+        body: JSON.stringify({ title: `${text.newChat} ${aiChats.length + 1}` }),
+      });
+      if (response.status === 401 || response.status === 403) {
+        onLogout();
+        return null;
+      }
+      if (!response.ok) return null;
+      const chat = (await response.json()) as AiChat;
+      setAiChats((current) => [...current, chat]);
+      setActiveChatId(chat.id);
+      setAiDraft("");
+      setPendingAiImage(null);
+      setSidebarOpen(true);
+      return chat.id;
+    } catch {
+      return null;
+    }
+  }, [aiChats.length, onLogout, text.newChat, token]);
+
+  const ensureChatWithUserMessage = useCallback(
+    async (content: string, imageDataUrl?: string): Promise<string | null> => {
+      const currentChatExists = activeChatId !== null && aiChats.some((chat) => chat.id === activeChatId);
+      const chatId = currentChatExists && activeChatId ? activeChatId : await createNewChat();
+      if (!chatId) return null;
+      const message = await persistChatMessage(chatId, "user", content, imageDataUrl);
+      if (!message) return null;
+      setAiChats((current) =>
+        current.map((chat) =>
+          chat.id === chatId ? { ...chat, messages: [...chat.messages, message] } : chat,
+        ),
+      );
+      return chatId;
+    },
+    [activeChatId, aiChats, createNewChat, persistChatMessage],
+  );
+
+  const beginSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    sidebarResizeRef.current = { startX: event.clientX, startWidth: sidebarWidth };
+  };
+
+  const appendAiMessage = (chatId: string, content: string) => {
+    setAiChats((current) => current.map((chat) => chat.id === chatId
+      ? { ...chat, messages: [...chat.messages, { id: createId(), role: "assistant", content }] } : chat));
+    void persistChatMessage(chatId, "assistant", content);
+  };
+
+  const stopCanvasAi = () => {
     sidebarRequestRef.current?.abort();
-    if (sidebarTypingRef.current !== null) window.clearInterval(sidebarTypingRef.current);
-    const controller = new AbortController();
+    sidebarRequestRef.current = null;
+    if (aiAnimationRef.current !== null) window.cancelAnimationFrame(aiAnimationRef.current);
+    aiAnimationRef.current = null;
+    aiSubmitRef.current = false;
+    setSidebarBusy(false);
+    setLoadingChatId(null);
+    if (solution) {
+      appendAiMessage(solution.chatId, text.discarded);
+      setSolution(null);
+    }
+  };
+
+  const acceptCanvasSolution = async () => {
+    if (!solution || sidebarBusy || aiSubmitRef.current) return;
+    aiSubmitRef.current = true;
+    const accepted = solution;
+    const pages = accepted.pages.map((page, index) => ({
+      ...page,
+      elements: [...page.elements, ...accepted.pieces.filter((piece) => piece.pageIndex === index).map((piece) => piece.element)],
+      appleDrawingData: accepted.pieces.some((piece) => piece.pageIndex === index) ? undefined : page.appleDrawingData,
+    }));
+    canvasPagesRef.current = pages;
+    activePageIndexRef.current = draftPageIndex;
+    elementsRef.current = pages[draftPageIndex].elements as SceneElement[];
+    setActivePageIndex(draftPageIndex);
+    setElements(elementsRef.current);
+    setSolution(null);
+    setSelectedIds([]);
+    selectionRef.current = null;
+    setSelection(null);
+    setAiError(null);
+    if (await queueCanvasSave()) appendAiMessage(accepted.chatId, text.accepted);
+    else setAiError(text.acceptedSaveFailed);
+    aiSubmitRef.current = false;
+  };
+
+  const runCanvasSolution = async (chatId: string, prompt: string, selectionImage: ExportedImage | null, controller: AbortController) => {
     sidebarRequestRef.current = controller;
     setSidebarOpen(true);
-    setSidebarText("");
     setSidebarBusy(true);
-
+    setLoadingChatId(chatId);
+    setAiError(null);
+    let preparingFormulas = false;
     try {
-      const image = await fetch(selectionImage.dataUrl).then((response) => response.blob());
       const data = new FormData();
-      data.append("image", image, "selection.png");
+      if (selectionImage) {
+        const image = await fetch(selectionImage.dataUrl).then((response) => response.blob());
+        data.append("image", image, "selection.png");
+      }
       data.append("language", language);
-      const response = await fetch(`${API_URL}/api/ai/sidebar`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: data,
-        signal: controller.signal,
+      data.append("prompt", prompt);
+      data.append("chat_id", chatId);
+      if (solution?.chatId === chatId) data.append("previous_solution", JSON.stringify(solution.response));
+      const response = await fetch(`${API_URL}/api/ai/canvas`, {
+        method: "POST", headers: apiHeaders(token), body: data, signal: controller.signal,
       });
-      if (response.status === 401) {
-        setSidebarBusy(false);
-        onLogout();
+      if (response.status === 401 || response.status === 403) { onLogout(); return; }
+      if (!response.ok) throw new Error("solution-request-failed");
+      const payload = await response.json() as AiSolutionResponse;
+      if (controller.signal.aborted) return;
+      if (payload.status === "clarification") {
+        appendAiMessage(chatId, payload.explanation);
         return;
       }
-      if (!response.ok) throw new Error("qwen-request-failed");
-      const payload = (await response.json()) as { text?: unknown };
-      if (typeof payload.text !== "string" || !payload.text.trim()) {
-        throw new Error("qwen-empty-response");
+      preparingFormulas = true;
+      const { renderLatexImage, renderBarChart } = await import("@/lib/latex-image");
+      const context = taskContextRef.current.get(chatId);
+      const pages: CanvasPage[] = canvasPagesRef.current.map((page, index) => ({
+        ...page, elements: index === activePageIndexRef.current ? [...elementsRef.current] : [...page.elements],
+      }));
+      let pageIndex = Math.max(0, pages.findIndex((page) => page.id === context?.pageId));
+      let anchor = context?.bounds;
+      const id = createId();
+      const pieces: CanvasSolution["pieces"] = [];
+      for (let stepIndex = 0; stepIndex < payload.steps.length; stepIndex++) {
+        if (controller.signal.aborted) return;
+        const step = payload.steps[stepIndex];
+        const images = step.latex.trim() ? [{ ...await renderLatexImage(step.latex), source: "latex" as const, latex: step.latex }] : [];
+        const blocks: Array<ExportedImage & { source: "latex" | "ai-chart"; latex?: string }> = [...images];
+        if (step.chart) blocks.push({ ...renderBarChart(step.chart), source: "ai-chart" });
+        for (const block of blocks) {
+          const occupied = (pages[pageIndex].elements as SceneElement[]).map(sceneElementBounds)
+            .filter((rect): rect is SelectionRect => rect !== null);
+          occupied.push(...pieces.filter((piece) => piece.pageIndex === pageIndex).map((piece) => piece.element));
+          let bounds = findSolutionSpace(block.width, block.height, occupied, anchor);
+          if (pieces.length && anchor && bounds && bounds.y < anchor.y + anchor.height) bounds = null;
+          if (!bounds) {
+            if (pages.length >= 1000) throw new Error("page-limit");
+            // New draft sheets are inserted immediately after the task/preceding solution sheet.
+            pageIndex += 1;
+            pages.splice(pageIndex, 0, { id: createId(), width: PAGE_WIDTH, height: PAGE_HEIGHT,
+              pageTemplate: pages[pageIndex - 1].pageTemplate, elements: [] });
+            for (const piece of pieces) if (piece.pageIndex >= pageIndex) piece.pageIndex += 1;
+            bounds = findSolutionSpace(block.width, block.height, []);
+          }
+          if (!bounds) throw new Error("formula-does-not-fit");
+          const element: ImageElement = { id: createId(), kind: "image", ...block, ...bounds,
+            formulaInstanceId: createId(), solutionId: id };
+          pieces.push({ element, pageIndex, stepIndex });
+          anchor = bounds;
+        }
       }
-
-      const answer = payload.text.trim();
-      let index = 0;
-      const charactersPerTick = Math.max(1, Math.ceil(answer.length / 240));
-      sidebarTypingRef.current = window.setInterval(() => {
-        index += charactersPerTick;
-        setSidebarText(answer.slice(0, index));
-        if (index >= answer.length) {
-          if (sidebarTypingRef.current !== null) window.clearInterval(sidebarTypingRef.current);
-          sidebarTypingRef.current = null;
+      if (controller.signal.aborted) return;
+      const prepared = { id, chatId, pages, pieces, response: payload };
+      setSolution(prepared);
+      setSelectedIds([]);
+      setSelection(null);
+      selectionRef.current = null;
+      setDraftPageIndex(pieces[0].pageIndex);
+      setInkProgress({ step: 0, progress: 0 });
+      const messageId = createId();
+      setAiChats((current) => current.map((chat) => chat.id === chatId
+        ? { ...chat, messages: [...chat.messages, { id: messageId, role: "assistant", content: payload.explanation }] } : chat));
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const duration = reducedMotion ? 1 : 1500;
+      const started = performance.now();
+      let lastStep = -1;
+      const animate = (now: number) => {
+        if (controller.signal.aborted) return;
+        const elapsed = now - started;
+        const step = Math.min(pieces.length - 1, Math.floor(elapsed / duration));
+        const progress = Math.min(1, (elapsed - step * duration) / (duration * 0.82));
+        setInkProgress({ step, progress });
+        if (step !== lastStep) {
+          lastStep = step;
+          setDraftPageIndex(pieces[step].pageIndex);
+          const content = [payload.explanation, ...payload.steps.slice(0, pieces[step].stepIndex + 1).map((item, index) => `${index + 1}. ${item.explanation}`)].join("\n\n");
+          setAiChats((current) => current.map((chat) => chat.id === chatId ? {
+            ...chat, messages: chat.messages.map((message) => message.id === messageId ? { ...message, content } : message),
+          } : chat));
+        }
+        if (elapsed >= duration * pieces.length) {
+          aiAnimationRef.current = null;
+          setInkProgress({ step: pieces.length, progress: 1 });
           setSidebarBusy(false);
+          setLoadingChatId(null);
+          sidebarRequestRef.current = null;
+          aiSubmitRef.current = false;
+          void persistChatMessage(chatId, "assistant", [payload.explanation,
+            ...payload.steps.map((item, index) => `${index + 1}. ${item.explanation}`)].join("\n\n"));
+          return;
         }
-      }, 20);
+        aiAnimationRef.current = window.requestAnimationFrame(animate);
+      };
+      aiAnimationRef.current = window.requestAnimationFrame(animate);
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setSidebarText(UI_TEXT[language].aiRequestFailed);
-      setSidebarBusy(false);
+      if (!controller.signal.aborted) {
+        console.error("[canvas-ai] Could not prepare the solution", error);
+        setAiError(preparingFormulas
+          ? error instanceof Error && ["formula-too-large", "formula-does-not-fit"].includes(error.message)
+            ? text.formulaTooLarge : text.formulaFailed
+          : text.aiRequestFailed);
+      }
     } finally {
-      if (sidebarRequestRef.current === controller) sidebarRequestRef.current = null;
+      if (sidebarRequestRef.current === controller && aiAnimationRef.current === null) {
+        sidebarRequestRef.current = null;
+        setSidebarBusy(false);
+        setLoadingChatId(null);
+        aiSubmitRef.current = false;
+      }
     }
-  }, [language, onLogout, token]);
+  };
 
-  const runCanvasAi = useCallback((rect: SelectionRect) => {
-    if (canvasDelayRef.current !== null) window.clearTimeout(canvasDelayRef.current);
-    if (canvasTypingRef.current !== null) window.clearInterval(canvasTypingRef.current);
-    setCanvasAiBusy(true);
-    const solution = randomSolution(language);
-    const id = createId();
-    canvasDelayRef.current = window.setTimeout(() => {
-      const fontSize = 30;
-      const width = Math.max(270, PAGE_WIDTH - Math.max(40, rect.x) - 40);
-      const estimatedHeight = solution.split("\n").length * fontSize * 1.5;
-      let x = Math.max(40, rect.x);
-      let y = rect.y + rect.height + 24;
-      if (x + width > PAGE_WIDTH - 40) x = 40;
-      if (y + estimatedHeight > PAGE_HEIGHT - 40) y = Math.max(40, rect.y - estimatedHeight - 20);
-      setElements((current) => [
-        ...current,
-        { id, kind: "text", x, y, width: Math.min(width, PAGE_WIDTH - x - 40), text: "", fontSize },
-      ]);
-      let index = 0;
-      canvasTypingRef.current = window.setInterval(() => {
-        index += 1;
-        setElements((current) =>
-          current.map((element) =>
-            element.id === id && element.kind === "text"
-              ? { ...element, text: solution.slice(0, index) }
-              : element,
-          ),
-        );
-        if (index >= solution.length) {
-          if (canvasTypingRef.current !== null) window.clearInterval(canvasTypingRef.current);
-          canvasTypingRef.current = null;
-          setCanvasAiBusy(false);
-        }
-      }, 34);
-    }, 650);
-  }, [language]);
+  const submitAiDraft = async (prompt = aiDraft.trim(), selectionImage = pendingAiImage) => {
+    if (!prompt || sidebarBusy || aiSubmitRef.current || photoLoading || latexLayoutBusy) return;
+    aiSubmitRef.current = true;
+    const controller = new AbortController();
+    sidebarRequestRef.current = controller;
+    setSidebarBusy(true);
+    setSidebarOpen(true);
+    setAiError(null);
+    const taskContext = pendingTaskRef.current;
+    const chatId = await ensureChatWithUserMessage(prompt, selectionImage?.dataUrl);
+    if (controller.signal.aborted) return;
+    if (!chatId) {
+      aiSubmitRef.current = false;
+      sidebarRequestRef.current = null;
+      setSidebarBusy(false);
+      setAiError(text.chatFailed);
+      return;
+    }
+    if (taskContext) taskContextRef.current.set(chatId, taskContext);
+    else if (!taskContextRef.current.has(chatId)) taskContextRef.current.set(chatId, { pageId: canvasPagesRef.current[activePageIndexRef.current].id });
+    pendingTaskRef.current = null;
+    setAiDraft("");
+    setPendingAiImage(null);
+    await runCanvasSolution(chatId, prompt, selectionImage, controller);
+  };
 
   const addSavedStar = useCallback(() => {
     if (canvasAiBusy) return;
@@ -1176,20 +1951,62 @@ export function KonvaDrawingCanvas({
     [canvasAiBusy],
   );
 
-  const addComplexIntegral = useCallback(() => {
+  const addLatexFormula = useCallback(
+    async (templateId: string, latex: string) => {
+      if (canvasAiBusy || latexLayoutBusy) return;
+      setLatexLayoutBusy(true);
+      try {
+        const layout = await requestLatexLayout(latex, {
+          maxWidth: PAGE_WIDTH - 80,
+          maxHeight: PAGE_HEIGHT - 160,
+        });
+        const id = createId();
+        const element: ImageElement = {
+          id, kind: "image", ...layout,
+          x: (PAGE_WIDTH - layout.width) / 2, y: (PAGE_HEIGHT - layout.height) / 2,
+          source: "latex", latex, formulaInstanceId: id, latexTemplateId: templateId,
+        };
+        setElements((current) => [...current, element]);
+        setShapesOpen(false);
+        setSelectedIds([]);
+        setSelection(null);
+      } catch {
+        setSidebarOpen(true);
+        setAiError(text.formulaFailed);
+      } finally {
+        setLatexLayoutBusy(false);
+      }
+    },
+    [canvasAiBusy, latexLayoutBusy, requestLatexLayout, text.formulaFailed],
+  );
+
+  const openLatexModal = () => {
     if (canvasAiBusy) return;
-    setElements((current) => {
-      const partCount = current.filter(
-        (element) => element.kind === "text" && element.source === "complex-integral",
-      ).length;
-      const copies = Math.floor(partCount / COMPLEX_INTEGRAL_PARTS.length);
-      const offset = (copies % 3) * 14;
-      return [...current, ...createComplexIntegralElements(offset)];
-    });
+    setLatexDraft("");
+    setLatexModalOpen(true);
     setShapesOpen(false);
-    setSelectedIds([]);
-    setSelection(null);
-  }, [canvasAiBusy]);
+    setEraserMenuOpen(false);
+    setContextMenu(null);
+  };
+
+  const cancelLatexModal = () => {
+    setLatexModalOpen(false);
+    setLatexDraft("");
+  };
+
+  const saveLatexFormula = () => {
+    if (latexPreview.loading || !latexPreview.layout || latexPreview.error || !latexDraft.trim()) return;
+    const formula: SavedLatexFormula = {
+      id: createId(),
+      title: `LaTeX ${savedLatexFormulas.length + 1}`,
+      latex: latexDraft.trim(),
+    };
+    const next = [...savedLatexFormulas, formula];
+    setSavedLatexFormulas(next);
+    localStorage.setItem(SAVED_LATEX_KEY, JSON.stringify(next));
+    setLatexModalOpen(false);
+    setLatexDraft("");
+  };
 
   const activateTool = useCallback((nextTool: Tool) => {
     setTool(nextTool);
@@ -1279,6 +2096,7 @@ export function KonvaDrawingCanvas({
   }, [elements, selectedIds]);
 
   const pasteClipboardAt = useCallback((point: Point) => {
+    if (canvasAiBusy) return;
     const clipboard = sceneClipboardRef.current;
     if (!clipboard) return;
     const offset = placementOffset(clipboard.bounds, point);
@@ -1294,25 +2112,20 @@ export function KonvaDrawingCanvas({
     selectionRef.current = nextBounds;
     setSelection(nextBounds);
     setContextMenu(null);
-  }, []);
+  }, [canvasAiBusy]);
 
-  const runSelectedSidebarAi = () => {
-    if (!selection || !selectedIds.length) return;
+  const prepareSelectedTask = (solveImmediately: boolean) => {
+    if (!selection || !selectedIds.length || canvasAiBusy || photoLoading || latexLayoutBusy) return;
     const selectionImage = exportSelection(selection);
     if (!selectionImage) return;
+    pendingTaskRef.current = { pageId: canvasPagesRef.current[activePageIndexRef.current].id, bounds: selection };
+    setSidebarOpen(true);
+    setAiDraft(text.imagePrompt);
+    setPendingAiImage(selectionImage);
     setSelectedIds([]);
     selectionRef.current = null;
     setSelection(null);
-    void runSidebarAi(selectionImage);
-  };
-
-  const runSelectedCanvasAi = () => {
-    if (!selection || !selectedIds.length) return;
-    const selectedArea = selection;
-    setSelectedIds([]);
-    selectionRef.current = null;
-    setSelection(null);
-    runCanvasAi(selectedArea);
+    if (solveImmediately) void submitAiDraft(text.imagePrompt, selectionImage);
   };
 
   const sendSelectedToWindows = () => {
@@ -1346,7 +2159,7 @@ export function KonvaDrawingCanvas({
     lastDragPointRef.current = null;
     setSelectedIds([]);
 
-    if (tool === "brush" || (tool === "eraser" && eraserMode === "normal")) {
+    if (tool === "brush") {
       const id = createId();
       activeStrokeIdRef.current = id;
       setSelection(null);
@@ -1355,11 +2168,15 @@ export function KonvaDrawingCanvas({
         {
           id,
           kind: "stroke",
-          mode: tool === "eraser" ? "erase" : "draw",
+          mode: "draw",
           points: [point.x, point.y, point.x + 0.01, point.y + 0.01],
-          strokeWidth: tool === "eraser" ? 27 : 4.5,
+          strokeWidth: 4.5,
         },
       ]);
+    } else if (tool === "eraser" && eraserMode === "normal") {
+      setSelection(null);
+      lastEraserPointRef.current = point;
+      eraseStrokesAlong(point, point);
     } else if (tool === "eraser") {
       setSelection(null);
       eraseObjectAtPoint(point);
@@ -1392,7 +2209,7 @@ export function KonvaDrawingCanvas({
       return;
     }
 
-    if (tool === "brush" || (tool === "eraser" && eraserMode === "normal")) {
+    if (tool === "brush") {
       const id = activeStrokeIdRef.current;
       if (!id) return;
       setElements((current) =>
@@ -1402,6 +2219,10 @@ export function KonvaDrawingCanvas({
             : element,
         ),
       );
+    } else if (tool === "eraser" && eraserMode === "normal") {
+      const previous = lastEraserPointRef.current ?? point;
+      eraseStrokesAlong(previous, point);
+      lastEraserPointRef.current = point;
     } else if (tool === "eraser") {
       eraseObjectAtPoint(point);
     } else if (startRef.current) {
@@ -1429,6 +2250,7 @@ export function KonvaDrawingCanvas({
     drawingRef.current = false;
     startRef.current = null;
     activeStrokeIdRef.current = null;
+    lastEraserPointRef.current = null;
     if (draggingSelectionRef.current) {
       draggingSelectionRef.current = false;
       lastDragPointRef.current = null;
@@ -1456,6 +2278,8 @@ export function KonvaDrawingCanvas({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (canvasAiBusy || (event.target instanceof HTMLElement &&
+        (event.target.isContentEditable || ["INPUT", "TEXTAREA"].includes(event.target.tagName)))) return;
       if (!(event.ctrlKey || event.metaKey) || tool !== "select") return;
       if (event.key.toLowerCase() === "c" && selectedIds.length) {
         event.preventDefault();
@@ -1469,7 +2293,7 @@ export function KonvaDrawingCanvas({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [copySelectedObjects, pasteClipboardAt, selectedIds.length, tool]);
+  }, [canvasAiBusy, copySelectedObjects, pasteClipboardAt, selectedIds.length, tool]);
 
   const cursor = tool === "select" ? (selectedIds.length ? "move" : "cell") : "crosshair";
   const selectionIslandLeft = selection
@@ -1482,6 +2306,15 @@ export function KonvaDrawingCanvas({
       ? selection.y * scaleY - 52
       : (selection.y + selection.height) * scaleY + 10
     : 0;
+  const latexPreviewScale = latexPreview.layout
+    ? Math.min(1, 560 / latexPreview.layout.width, 240 / latexPreview.layout.height)
+    : 1;
+  const latexPreviewWidth = latexPreview.layout
+    ? Math.max(1, Math.ceil(latexPreview.layout.width * latexPreviewScale))
+    : 0;
+  const latexPreviewHeight = latexPreview.layout
+    ? Math.max(1, Math.ceil(latexPreview.layout.height * latexPreviewScale))
+    : 0;
 
   return (
     <>
@@ -1490,6 +2323,51 @@ export function KonvaDrawingCanvas({
         className="relative flex min-h-0 min-w-0 flex-1 justify-center overflow-hidden px-6 pb-4 pt-[72px]"
         ref={workspaceRef}
       >
+        <div className="absolute left-4 top-4 z-10 flex max-w-[260px] items-center gap-2">
+          <button
+            aria-label={text.backToCanvases}
+            disabled={photoLoading || canvasAiBusy}
+            className="grid size-11 shrink-0 place-items-center rounded-xl border border-[#dfe3e8] bg-white text-[#697386] shadow-sm hover:bg-[#eef0f3]"
+            onClick={() => void returnToCanvases()}
+            title={canvasAiBusy ? text.reviewBeforeLeaving : text.backToCanvases}
+            type="button"
+          >
+            <ArrowLeft aria-hidden="true" size={19} strokeWidth={2} />
+          </button>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-[#111827]">{canvas.title}</div>
+            <div className={`text-xs ${saveState === "error" ? "text-red-500" : "text-[#697386]"}`}>
+              {saveState === "saving"
+                ? text.saving
+                : saveState === "error"
+                  ? text.saveFailed
+                  : text.saved}
+            </div>
+            {visiblePages.length > 1 && (
+              <div className="mt-1 flex items-center gap-1 text-xs text-[#697386]">
+                <button
+                  aria-label="Previous page"
+                  className="grid size-5 place-items-center rounded hover:bg-[#eef0f3] disabled:opacity-30"
+                  disabled={photoLoading || visiblePageIndex === 0 || (!solution && (sidebarBusy || saveState === "saving"))}
+                  onClick={() => void openPage(visiblePageIndex - 1)}
+                  type="button"
+                >
+                  <ChevronLeft aria-hidden="true" size={14} />
+                </button>
+                <span>{visiblePageIndex + 1} / {visiblePages.length}</span>
+                <button
+                  aria-label="Next page"
+                  className="grid size-5 place-items-center rounded hover:bg-[#eef0f3] disabled:opacity-30"
+                  disabled={photoLoading || visiblePageIndex >= visiblePages.length - 1 || (!solution && (sidebarBusy || saveState === "saving"))}
+                  onClick={() => void openPage(visiblePageIndex + 1)}
+                  type="button"
+                >
+                  <ChevronRight aria-hidden="true" size={14} />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
         <div className="absolute left-1/2 top-4 z-10 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-[#dfe3e8] bg-white p-1.5 shadow-sm">
           {tools.map(({ id, Icon }) => {
             const label = text[id];
@@ -1563,6 +2441,19 @@ export function KonvaDrawingCanvas({
             );
           })}
 
+          <button
+            aria-label={text.elementBounds}
+            aria-pressed={showElementBounds}
+            className={`grid size-10 place-items-center rounded-lg transition-colors ${
+              showElementBounds ? "bg-[#eff6ff] text-[#2563eb]" : "text-[#697386] hover:bg-[#eef0f3]"
+            }`}
+            onClick={() => setShowElementBounds((visible) => !visible)}
+            title={text.elementBounds}
+            type="button"
+          >
+            <Scan aria-hidden="true" size={19} strokeWidth={2} />
+          </button>
+
           <div className="relative">
             <button
               aria-expanded={shapesOpen}
@@ -1577,7 +2468,7 @@ export function KonvaDrawingCanvas({
               <Shapes aria-hidden="true" size={19} strokeWidth={2} />
             </button>
             {shapesOpen && (
-              <div className="absolute left-1/2 top-12 z-20 w-[248px] -translate-x-1/2 rounded-xl border border-[#dfe3e8] bg-white p-1.5 shadow-lg">
+              <div className="absolute left-1/2 top-12 z-20 max-h-[70vh] w-[272px] -translate-x-1/2 overflow-y-auto rounded-xl border border-[#dfe3e8] bg-white p-1.5 shadow-lg">
                 <button
                   aria-label={text.addStar}
                   className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-[#334155] hover:bg-[#eef0f3]"
@@ -1616,37 +2507,114 @@ export function KonvaDrawingCanvas({
                 <button
                   aria-label={text.addIntegral}
                   className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-[#334155] hover:bg-[#eef0f3]"
-                  onClick={addComplexIntegral}
+                  onClick={() => addLatexFormula(LATEX_EXAMPLES[0].id, LATEX_EXAMPLES[0].latex)}
                   title={text.complexIntegral}
                   type="button"
                 >
                   <Sigma aria-hidden="true" className="shrink-0 text-[#7c3aed]" size={19} strokeWidth={2} />
                   <span>{text.complexIntegral}</span>
                 </button>
+                <button
+                  aria-label={text.addQuadratic}
+                  className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-[#334155] hover:bg-[#eef0f3]"
+                  onClick={() => addLatexFormula(LATEX_EXAMPLES[1].id, LATEX_EXAMPLES[1].latex)}
+                  title={text.quadraticFormula}
+                  type="button"
+                >
+                  <Sigma aria-hidden="true" className="shrink-0 text-[#7c3aed]" size={19} strokeWidth={2} />
+                  <span>{text.quadraticFormula}</span>
+                </button>
+                {savedLatexFormulas.length > 0 && (
+                  <>
+                    <div className="mx-2 my-1.5 h-px bg-[#e5e7eb]" />
+                    <div className="px-3 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wide text-[#697386]">
+                      {text.customFormulas}
+                    </div>
+                    {savedLatexFormulas.map((formula) => (
+                      <button
+                        aria-label={formula.title}
+                        className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-[#334155] hover:bg-[#eef0f3]"
+                        key={formula.id}
+                        onClick={() => addLatexFormula(formula.id, formula.latex)}
+                        title={formula.latex}
+                        type="button"
+                      >
+                        <Sigma aria-hidden="true" className="shrink-0 text-[#2563eb]" size={19} strokeWidth={2} />
+                        <span className="truncate">{formula.title}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
               </div>
             )}
           </div>
 
           <button
-            aria-label={text.settings}
+            aria-label={text.latexTool}
             className="grid size-10 place-items-center rounded-lg text-[#697386] hover:bg-[#eef0f3]"
-            onClick={() => {
-              setSettingsOpen(true);
-              setShapesOpen(false);
-              setEraserMenuOpen(false);
-            }}
-            title={text.settings}
+            onClick={openLatexModal}
+            title={text.latexTool}
             type="button"
           >
-            <Settings aria-hidden="true" size={19} strokeWidth={2} />
+            <Sigma aria-hidden="true" size={19} strokeWidth={2} />
+          </button>
+          <input
+            accept=".png,.jpeg,.jpg,image/png,image/jpeg"
+            aria-label={text.addPhoto}
+            className="hidden"
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (file) void addPhoto(file);
+            }}
+            ref={photoInputRef}
+            type="file"
+          />
+          <button
+            aria-label={photoLoading ? text.photoLoading : text.addPhoto}
+            aria-busy={photoLoading}
+            className="grid size-10 place-items-center rounded-lg text-[#697386] hover:bg-[#eef0f3] disabled:opacity-45"
+            disabled={photoLoading || canvasAiBusy}
+            onClick={() => photoInputRef.current?.click()}
+            title={photoLoading ? text.photoLoading : text.addPhoto}
+            type="button"
+          >
+            <ImagePlus aria-hidden="true" size={19} strokeWidth={2} />
           </button>
         </div>
+
+        {photoError && (
+          <div className="absolute left-1/2 top-[72px] z-20 flex max-w-[90%] -translate-x-1/2 items-center gap-3 rounded-xl border border-red-200 bg-white px-4 py-3 text-sm text-red-600 shadow-sm" role="alert">
+            {text[photoError]}
+            <button aria-label={text.close} className="shrink-0" onClick={() => setPhotoError(null)} type="button">
+              <X aria-hidden="true" size={16} />
+            </button>
+          </div>
+        )}
+
+        {!sidebarOpen && (
+          <button
+            aria-label={text.openAi}
+            className="absolute right-4 top-1/2 z-20 flex h-11 -translate-y-1/2 items-center gap-2 rounded-xl border border-[#dfe3e8] bg-white px-3 text-sm font-medium text-[#2563eb] shadow-sm transition-colors hover:bg-[#eff6ff]"
+            onClick={() => setSidebarOpen(true)}
+            title={text.openAi}
+            type="button"
+          >
+            <Sparkles aria-hidden="true" size={18} strokeWidth={2} />
+            <span>{text.ai}</span>
+          </button>
+        )}
 
         <div
           aria-label="A4 canvas"
           className="keep-white relative flex-none overflow-hidden rounded-[3px] bg-white shadow-[0_4px_24px_rgba(17,24,39,0.08)] ring-1 ring-[#dfe3e8]"
           style={{ height: stageSize.height, width: stageSize.width }}
         >
+          {solution && (
+            <div className="pointer-events-none absolute bottom-2 right-3 z-10 rounded-md bg-[#eff6ff] px-2 py-1 text-xs text-[#2563eb]">
+              {text.draftPage} {draftPageIndex + 1}
+            </div>
+          )}
           {stageSize.width > 0 && stageSize.height > 0 && (
             <Stage
               height={stageSize.height}
@@ -1662,18 +2630,17 @@ export function KonvaDrawingCanvas({
               <Layer listening={false} scaleX={scaleX} scaleY={scaleY}>
                 <KonvaRect fill="#ffffff" height={PAGE_HEIGHT} width={PAGE_WIDTH} />
               </Layer>
-              <Layer listening={false} scaleX={scaleX} scaleY={scaleY}>
-                {elements.map((element) => {
+              <Layer listening={false} ref={sceneLayerRef} scaleX={scaleX} scaleY={scaleY}>
+                {visibleElements.map((element) => {
                   if (element.kind === "stroke") {
                     return (
                       <Line
-                        globalCompositeOperation={element.mode === "erase" ? "destination-out" : "source-over"}
                         key={element.id}
                         lineCap="round"
                         lineJoin="round"
                         listening={false}
                         points={element.points}
-                        stroke={element.mode === "erase" ? "rgba(0,0,0,1)" : "#111827"}
+                        stroke={element.stroke ?? "#111827"}
                         strokeWidth={element.strokeWidth}
                         tension={0.35}
                       />
@@ -1697,12 +2664,16 @@ export function KonvaDrawingCanvas({
                   if (element.kind === "text") {
                     return (
                       <KonvaText
-                        fill="#2563eb"
-                        fontFamily="Segoe Print, Comic Sans MS, cursive"
+                        fill={element.fill ?? "#2563eb"}
+                        fontFamily={mathFontFamily(
+                          element.text,
+                          element.fontFamily ?? "Segoe Print, Comic Sans MS, cursive",
+                        )}
                         fontSize={element.fontSize}
                         key={element.id}
-                        lineHeight={1.5}
+                        lineHeight={element.lineHeight ?? 1.5}
                         listening={false}
+                        rotation={element.rotation ?? 0}
                         text={element.text}
                         width={element.width}
                         wrap="word"
@@ -1717,7 +2688,30 @@ export function KonvaDrawingCanvas({
                   return <SceneImage element={element} key={element.id} />;
                 })}
               </Layer>
+              {solution && (
+                <Layer listening={false} scaleX={scaleX} scaleY={scaleY}>
+                  {solution.pieces.map((piece, index) => ({ ...piece, index })).filter((piece) => piece.pageIndex === draftPageIndex && piece.index <= inkProgress.step).map((piece) => {
+                    const progress = piece.index < inkProgress.step ? 1 : inkProgress.progress;
+                    const { element } = piece;
+                    return (
+                      <Group key={element.id}>
+                        <KonvaRect x={element.x - 7} y={element.y - 7} width={element.width + 14} height={element.height + 14}
+                          cornerRadius={5} fill="rgba(37,99,235,0.025)" stroke="rgba(37,99,235,0.3)" strokeWidth={1} dash={[5, 5]} />
+                        <Group clipX={element.x - 2} clipY={element.y - 2} clipWidth={(element.width + 4) * progress} clipHeight={element.height + 4} opacity={0.83}>
+                          <SceneImage element={element} />
+                        </Group>
+                        {progress > 0 && progress < 1 && (
+                          <Line points={[element.x + element.width * progress, element.y + element.height,
+                            element.x + element.width * progress + 7, element.y + element.height - 12]}
+                            stroke="#2456a6" strokeWidth={3} lineCap="round" />
+                        )}
+                      </Group>
+                    );
+                  })}
+                </Layer>
+              )}
               <Layer listening={false} ref={selectionLayerRef} scaleX={scaleX} scaleY={scaleY}>
+                {showElementBounds && <ElementBoundsOverlay sceneLayerRef={sceneLayerRef} />}
                 {selection && (
                   <KonvaRect
                     dash={[10, 7]}
@@ -1758,7 +2752,7 @@ export function KonvaDrawingCanvas({
                 aria-label={text.ai1Aria}
                 className="grid size-9 place-items-center rounded-lg text-[#2563eb] hover:bg-[#eff6ff] disabled:cursor-wait disabled:opacity-50"
                 disabled={sidebarBusy}
-                onClick={runSelectedSidebarAi}
+                onClick={() => prepareSelectedTask(true)}
                 title={text.ai1Title}
                 type="button"
               >
@@ -1768,7 +2762,7 @@ export function KonvaDrawingCanvas({
                 aria-label={text.ai2Aria}
                 className="grid size-9 place-items-center rounded-lg text-[#2563eb] hover:bg-[#eff6ff] disabled:cursor-wait disabled:opacity-50"
                 disabled={canvasAiBusy}
-                onClick={runSelectedCanvasAi}
+                onClick={() => prepareSelectedTask(false)}
                 title={text.ai2Title}
                 type="button"
               >
@@ -1812,32 +2806,174 @@ export function KonvaDrawingCanvas({
       {sidebarOpen && (
         <aside
           aria-label={text.ai}
-          className="flex w-[320px] shrink-0 flex-col border-l border-[#dfe3e8] bg-white max-lg:w-[280px]"
+          className="relative flex min-w-[320px] shrink-0 flex-col border-l border-[#dfe3e8] bg-white"
+          style={{ width: sidebarWidth }}
         >
+
+          <div
+            aria-label={text.resizeSidebar}
+            className="absolute -left-1 top-0 z-30 h-full w-2 cursor-col-resize touch-none"
+            onPointerDown={beginSidebarResize}
+            role="separator"
+            title={text.resizeSidebar}
+          />
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#dfe3e8] px-4 text-[#697386]">
-            <Sparkles aria-hidden="true" size={18} strokeWidth={2} />
-            <button
-              aria-label={text.closeAi}
-              className="grid size-9 place-items-center rounded-lg hover:bg-[#eef0f3]"
-              onClick={() => setSidebarOpen(false)}
-              title={text.close}
-              type="button"
-            >
-              <X aria-hidden="true" size={18} strokeWidth={2} />
-            </button>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#111827]">
+              <Sparkles aria-hidden="true" className="text-[#2563eb]" size={18} strokeWidth={2} />
+              {text.ai}
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                aria-label={text.newChat}
+                disabled={canvasAiBusy}
+                className="grid size-9 place-items-center rounded-lg hover:bg-[#eef0f3]"
+                onClick={createNewChat}
+                title={text.newChat}
+                type="button"
+              >
+                <MessageSquarePlus aria-hidden="true" size={18} strokeWidth={2} />
+              </button>
+              <button
+                aria-label={text.closeAi}
+                className="grid size-9 place-items-center rounded-lg hover:bg-[#eef0f3]"
+                onClick={() => setSidebarOpen(false)}
+                title={text.close}
+                type="button"
+              >
+                <X aria-hidden="true" size={18} strokeWidth={2} />
+              </button>
+            </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-5">
-            {sidebarBusy && !sidebarText && (
-              <div aria-label={text.processing} className="flex h-6 items-center gap-1.5">
-                <span className="size-1.5 animate-pulse rounded-full bg-[#2563eb]" />
-                <span className="size-1.5 animate-pulse rounded-full bg-[#2563eb] [animation-delay:120ms]" />
-                <span className="size-1.5 animate-pulse rounded-full bg-[#2563eb] [animation-delay:240ms]" />
+          <div aria-label={text.chats} className="flex shrink-0 gap-1 overflow-x-auto border-b border-[#dfe3e8] p-2">
+            {aiChats.map((chat) => (
+              <button
+                aria-pressed={chat.id === activeChatId}
+                className={`h-8 max-w-36 shrink-0 truncate rounded-lg px-3 text-xs transition-colors ${
+                  chat.id === activeChatId
+                    ? "bg-[#eff6ff] text-[#2563eb]"
+                    : "text-[#697386] hover:bg-[#eef0f3]"
+                }`}
+                key={chat.id}
+                disabled={canvasAiBusy && chat.id !== activeChatId}
+                onClick={() => setActiveChatId(chat.id)}
+                type="button"
+              >
+                {chat.title}
+              </button>
+            ))}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5" ref={chatScrollRef}>
+            {!activeChat?.messages.length && loadingChatId !== activeChatId && (
+              <div className="max-w-[280px] text-sm leading-6 text-[#697386]">{text.emptyChat}</div>
+            )}
+            <div className="flex flex-col gap-6">
+              {activeChat?.messages.map((message) =>
+                message.role === "user" ? (
+                  <div className="flex justify-end" key={message.id}>
+                    <div className="max-w-[88%] overflow-hidden rounded-[22px] bg-[#334155] text-sm leading-6 text-white">
+                      {message.image_data_url && (
+                        // The authenticated chat API returns a private data URL, so Next Image cannot optimize it.
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          alt={text.selectedArea}
+                          className="max-h-64 w-full bg-white object-contain"
+                          src={message.image_data_url}
+                        />
+                      )}
+                      <div className="px-4 py-2.5">{message.content}</div>
+                    </div>
+                  </div>
+                ) : (
+                  <article className="ai-markdown text-[15px] leading-7 text-[#111827]" key={message.id}>
+                    <div className="whitespace-pre-wrap">{message.content}</div>
+                    {message.content && (
+                      <div className="mt-2 flex items-center gap-1 text-[#697386]">
+                        <button aria-label={text.copyResponse} onClick={() => void navigator.clipboard.writeText(message.content).catch(() => {})} className="grid size-7 place-items-center rounded-md hover:bg-[#eef0f3]" title={text.copyResponse} type="button">
+                          <Copy aria-hidden="true" size={15} strokeWidth={2} />
+                        </button>
+
+                      </div>
+                    )}
+                  </article>
+                ),
+              )}
+              {sidebarBusy && loadingChatId === activeChatId && (
+                <div aria-label={text.processing} className="flex h-7 items-center gap-1.5">
+                  <span className="size-1.5 animate-pulse rounded-full bg-[#2563eb]" />
+                  <span className="size-1.5 animate-pulse rounded-full bg-[#2563eb] [animation-delay:120ms]" />
+                  <span className="size-1.5 animate-pulse rounded-full bg-[#2563eb] [animation-delay:240ms]" />
+                </div>
+              )}
+            </div>
+          </div>
+          {(solution || sidebarBusy) && (
+            <div className="mx-3 mb-3 rounded-xl border border-[#dfe3e8] bg-[#eff6ff] p-3" aria-live="polite">
+              <div className="flex items-center gap-2 text-sm font-medium text-[#2563eb]">
+                <PenLine size={17} />
+                {sidebarBusy ? (aiAnimationRef.current !== null ? text.writing : text.thinking) : text.draftTitle}
+              </div>
+              {solution && !sidebarBusy && <p className="mt-1 text-xs leading-5 text-[#697386]">{text.draftHint}</p>}
+              <div className="mt-3 flex gap-2">
+                {solution && !sidebarBusy && (
+                  <button className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#2563eb] px-3 py-2 text-sm text-white"
+                    onClick={() => void acceptCanvasSolution()} type="button"><Check size={16} />{text.acceptDraft}</button>
+                )}
+                <button className="rounded-lg border border-[#dfe3e8] bg-white px-3 py-2 text-sm text-[#334155]"
+                  onClick={stopCanvasAi} type="button">{sidebarBusy ? text.stopAi : text.discardDraft}</button>
+              </div>
+            </div>
+          )}
+          {aiError && (
+            <div className="mx-3 mb-3 rounded-lg border border-red-200 p-3 text-sm text-red-600" role="alert">
+              {aiError}
+              {saveState === "error" && <button className="mt-2 block underline" onClick={() => void queueCanvasSave().then((saved) => { if (saved) setAiError(null); })} type="button">{text.retrySave}</button>}
+            </div>
+          )}
+          <form
+            className="flex shrink-0 flex-col gap-2 border-t border-[#dfe3e8] p-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitAiDraft();
+            }}
+          >
+            {pendingAiImage && (
+              <div className="relative w-fit max-w-full overflow-hidden rounded-xl border border-[#dfe3e8] bg-[#f8fafc] p-1">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  alt={text.selectedArea}
+                  className="max-h-28 max-w-full rounded-lg object-contain"
+                  src={pendingAiImage.dataUrl}
+                />
+                <button
+                  aria-label={text.removeAttachment}
+                  className="absolute right-1.5 top-1.5 grid size-7 place-items-center rounded-full bg-[#111827]/75 text-white hover:bg-[#111827]"
+                  onClick={() => setPendingAiImage(null)}
+                  title={text.removeAttachment}
+                  type="button"
+                >
+                  <X aria-hidden="true" size={15} strokeWidth={2.2} />
+                </button>
               </div>
             )}
-            {sidebarText && (
-              <div className="whitespace-pre-wrap text-[15px] leading-7 text-[#111827]">{sidebarText}</div>
-            )}
-          </div>
+            <div className="flex gap-2">
+              <input
+                aria-label={text.inputPlaceholder}
+                className="min-w-0 flex-1 rounded-xl border border-[#dfe3e8] bg-white px-3 py-2.5 text-sm text-[#111827] placeholder:text-[#697386] focus:border-[#2563eb] focus:outline-none"
+                onChange={(event) => setAiDraft(event.target.value)}
+                placeholder={solution ? text.revisePlaceholder : text.inputPlaceholder}
+                value={aiDraft}
+              />
+              <button
+                aria-label={text.sendMessage}
+                className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#2563eb] text-white disabled:cursor-not-allowed disabled:opacity-45"
+                disabled={sidebarBusy || !aiDraft.trim()}
+                title={text.sendMessage}
+                type="submit"
+              >
+                <SendHorizontal aria-hidden="true" size={18} strokeWidth={2} />
+              </button>
+            </div>
+          </form>
         </aside>
       )}
     </main>
@@ -1871,27 +3007,27 @@ export function KonvaDrawingCanvas({
         </div>
       </div>
     )}
-    {settingsOpen && (
+    {latexModalOpen && (
       <div
         className="fixed inset-0 z-50 grid place-items-center bg-[#111827]/35 p-5 backdrop-blur-[2px]"
         onPointerDown={(event) => {
-          if (event.target === event.currentTarget) setSettingsOpen(false);
+          if (event.target === event.currentTarget) cancelLatexModal();
         }}
       >
         <div
-          aria-labelledby="settings-title"
+          aria-labelledby="latex-modal-title"
           aria-modal="true"
-          className="flex max-h-[calc(100dvh-40px)] w-full max-w-[420px] flex-col overflow-hidden rounded-2xl border border-[#dfe3e8] bg-white shadow-2xl"
+          className="flex max-h-[calc(100dvh-40px)] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl border border-[#dfe3e8] bg-white shadow-2xl"
           role="dialog"
         >
-          <div className="flex h-14 items-center justify-between border-b border-[#dfe3e8] px-5">
-            <h2 className="text-base font-semibold text-[#111827]" id="settings-title">
-              {text.settings}
+          <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#dfe3e8] px-5">
+            <h2 className="text-base font-semibold text-[#111827]" id="latex-modal-title">
+              {text.latexModalTitle}
             </h2>
             <button
-              aria-label={text.closeSettings}
+              aria-label={text.cancel}
               className="grid size-9 place-items-center rounded-lg text-[#697386] hover:bg-[#eef0f3]"
-              onClick={() => setSettingsOpen(false)}
+              onClick={cancelLatexModal}
               type="button"
             >
               <X aria-hidden="true" size={18} strokeWidth={2} />
@@ -1899,76 +3035,52 @@ export function KonvaDrawingCanvas({
           </div>
 
           <div className="min-h-0 overflow-y-auto p-5">
-            <div className="text-sm font-medium text-[#334155]">{text.theme}</div>
-            <div className="mt-3 grid grid-cols-2 gap-3">
-              <button
-                aria-pressed={appTheme === "light"}
-                className={`flex h-12 items-center gap-3 rounded-xl border px-3 text-sm transition-colors ${
-                  appTheme === "light"
-                    ? "border-[#2563eb] bg-[#eff6ff] text-[#2563eb]"
-                    : "border-[#dfe3e8] text-[#334155] hover:bg-[#f8fafc]"
-                }`}
-                onClick={() => onThemeChange("light")}
-                type="button"
-              >
-                <Sun aria-hidden="true" size={18} strokeWidth={2} />
-                {text.light}
-              </button>
-              <button
-                aria-pressed={appTheme === "dark"}
-                className={`flex h-12 items-center gap-3 rounded-xl border px-3 text-sm transition-colors ${
-                  appTheme === "dark"
-                    ? "border-[#2563eb] bg-[#eff6ff] text-[#2563eb]"
-                    : "border-[#dfe3e8] text-[#334155] hover:bg-[#f8fafc]"
-                }`}
-                onClick={() => onThemeChange("dark")}
-                type="button"
-              >
-                <Moon aria-hidden="true" size={18} strokeWidth={2} />
-                {text.dark}
-              </button>
-            </div>
+            <textarea
+              aria-label="LaTeX"
+              autoFocus
+              className="h-32 w-full resize-y rounded-xl border border-[#dfe3e8] bg-white px-3 py-2.5 font-mono text-sm leading-6 text-[#111827] placeholder:text-[#697386] focus:border-[#2563eb] focus:outline-none"
+              onChange={(event) => setLatexDraft(event.target.value)}
+              placeholder={text.latexPlaceholder}
+              spellCheck={false}
+              value={latexDraft}
+            />
 
-            <div className="my-5 h-px bg-[#e5e7eb]" />
-            <div className="flex items-center gap-2 text-sm font-medium text-[#334155]">
-              <Languages aria-hidden="true" size={17} strokeWidth={2} />
-              {text.language}
+            <div className="mb-2 mt-4 text-sm font-medium text-[#334155]">{text.latexPreview}</div>
+            <div className="keep-white grid min-h-36 place-items-center overflow-auto rounded-xl border border-[#dfe3e8] bg-white p-4">
+              {!latexPreview.layout && !latexPreview.error && !latexPreview.loading && (
+                <div className="text-sm text-[#697386]">{text.latexEmptyPreview}</div>
+              )}
+              {latexPreview.loading && (
+                <div className="text-sm text-[#697386]">{text.processing}</div>
+              )}
+              {latexPreview.error && (
+                <div className="max-w-full break-words text-sm leading-6 text-red-600">
+                  {text.invalidLatex}: {latexPreview.error}
+                </div>
+              )}
+              {latexPreview.layout && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img alt={text.latexPreview} src={latexPreview.layout.dataUrl}
+                  width={latexPreviewWidth} height={latexPreviewHeight} />
+              )}
             </div>
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              {(
-                [
-                  ["ru", "Русский"],
-                  ["en", "English"],
-                  ["zh", "中文"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  aria-pressed={language === id}
-                  className={`h-11 rounded-xl border px-2 text-sm transition-colors ${
-                    language === id
-                      ? "border-[#2563eb] bg-[#eff6ff] text-[#2563eb]"
-                      : "border-[#dfe3e8] text-[#334155] hover:bg-[#f8fafc]"
-                  }`}
-                  key={id}
-                  onClick={() => onLanguageChange(id)}
-                  type="button"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+          </div>
 
-            <div className="my-5 h-px bg-[#e5e7eb]" />
+          <div className="flex shrink-0 justify-end gap-2 border-t border-[#dfe3e8] px-5 py-4">
             <button
-              className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-red-200 text-sm font-medium text-red-600 hover:bg-red-50"
-              onClick={() => {
-                setSettingsOpen(false);
-                onLogout();
-              }}
+              className="h-10 rounded-xl border border-[#dfe3e8] px-4 text-sm font-medium text-[#334155] hover:bg-[#eef0f3]"
+              onClick={cancelLatexModal}
               type="button"
             >
-              <LogOut aria-hidden="true" size={18} strokeWidth={2} />
-              {text.logout}
+              {text.cancel}
+            </button>
+            <button
+              className="h-10 rounded-xl bg-[#2563eb] px-4 text-sm font-medium text-white hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={latexPreview.loading || !latexPreview.layout || Boolean(latexPreview.error) || !latexDraft.trim()}
+              onClick={saveLatexFormula}
+              type="button"
+            >
+              {text.addToShapes}
             </button>
           </div>
         </div>

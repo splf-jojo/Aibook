@@ -1,4 +1,6 @@
 .env
+.env.production
+*.pem
 .venv/
 __pycache__/
 .pytest_cache/
@@ -11,6 +13,10 @@ out/
 dist/
 coverage/
 *.tsbuildinfo
+
+.playwright-cli/
+output/
+/aibook-deploy.tar.gz
 
 *.log
 .DS_Store

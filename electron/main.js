@@ -159,7 +159,9 @@ function connectSocket() {
   if (!currentSession) return;
   const sessionAtConnect = currentSession;
   socket = new WebSocket(`${WS_URL}/ws`, {
-    headers: { Authorization: `Bearer ${currentSession.token}` },
+    headers: {
+      Authorization: `Bearer ${currentSession.token}`,
+    },
   });
 
   socket.on("open", () => {
@@ -250,7 +252,9 @@ function createWindow() {
 }
 
 ipcMain.handle("auth:restore", restoreSession);
-ipcMain.handle("auth:login", (_, credentials) => authenticate(credentials.username, credentials.password));
+ipcMain.handle("auth:login", (_, credentials) =>
+  authenticate(credentials.username, credentials.password),
+);
 ipcMain.handle("images:list", () => Array.from(receivedImages.values()));
 ipcMain.handle("auth:logout", async () => {
   stopSocket();

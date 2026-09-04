@@ -1,0 +1,22 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$API_DOMAIN}, http://localhost, http://127.0.0.1 {
+	encode zstd gzip
+
+	route {
+		@backend path /api/* /health /openapi.json /docs /docs/* /redoc /redoc/* /ws /ws/*
+		reverse_proxy @backend api:8000
+		reverse_proxy web:3000
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+	}
+
+	log
+}

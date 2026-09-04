@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "katex/dist/katex.min.css";
+@import "highlight.js/styles/github-dark.css";
 
 :root {
   --background: #f4f5f7;
@@ -87,4 +89,114 @@ button:focus-visible,
 input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Markdown-ответы ИИ: обычный поток текста, без «пузыря». */
+.ai-markdown {
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.ai-markdown > :first-child {
+  margin-top: 0;
+}
+
+.ai-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.ai-markdown p,
+.ai-markdown ul,
+.ai-markdown ol,
+.ai-markdown blockquote,
+.ai-markdown pre,
+.ai-markdown table {
+  margin: 0 0 1rem;
+}
+
+.ai-markdown h1,
+.ai-markdown h2,
+.ai-markdown h3,
+.ai-markdown h4 {
+  margin: 1.5rem 0 0.65rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.ai-markdown h1 { font-size: 1.45rem; }
+.ai-markdown h2 { font-size: 1.25rem; }
+.ai-markdown h3 { font-size: 1.1rem; }
+.ai-markdown h4 { font-size: 1rem; }
+
+.ai-markdown ul,
+.ai-markdown ol {
+  padding-left: 1.4rem;
+}
+
+.ai-markdown ul { list-style: disc; }
+.ai-markdown ol { list-style: decimal; }
+
+.ai-markdown li + li {
+  margin-top: 0.25rem;
+}
+
+.ai-markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.ai-markdown blockquote {
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+  padding-left: 0.9rem;
+}
+
+.ai-markdown code {
+  border-radius: 0.3rem;
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  padding: 0.1rem 0.3rem;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em;
+}
+
+.ai-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 0.65rem;
+  background: #0d1117;
+  color: #e6edf3;
+  padding: 0.85rem 1rem;
+}
+
+.ai-markdown pre code {
+  display: block;
+  background: transparent;
+  padding: 0;
+}
+
+.ai-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.ai-markdown th,
+.ai-markdown td {
+  border: 1px solid var(--border);
+  padding: 0.45rem 0.65rem;
+  text-align: left;
+}
+
+.ai-markdown th {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  font-weight: 600;
+}
+
+.ai-markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 1rem 0;
+  padding: 0.15rem 0;
 }

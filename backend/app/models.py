@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -28,6 +28,12 @@ class User(Base):
     transfers: Mapped[list["ImageTransfer"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    chats: Mapped[list["AiChat"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    canvases: Mapped[list["CanvasDocument"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class ImageTransfer(Base):
@@ -47,3 +53,50 @@ class ImageTransfer(Base):
 
     user: Mapped[User] = relationship(back_populates="transfers")
 
+
+class AiChat(Base):
+    __tablename__ = "ai_chats"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    user: Mapped[User] = relationship(back_populates="chats")
+    messages: Mapped[list["AiChatMessage"]] = relationship(
+        back_populates="chat", cascade="all, delete-orphan", order_by="AiChatMessage.created_at"
+    )
+
+
+class AiChatMessage(Base):
+    __tablename__ = "ai_chat_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    chat_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_chats.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    image_data_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    chat: Mapped[AiChat] = relationship(back_populates="messages")
+
+
+class CanvasDocument(Base):
+    __tablename__ = "canvases"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(120))
+    content: Mapped[dict[str, object]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True
+    )
+
+    user: Mapped[User] = relationship(back_populates="canvases")
