@@ -85,6 +85,28 @@ test("LaTeX aliases support functions, differential pairs, operators and distinc
   assert.equal(cleanLatex("\\[x^2\\]"), "x^2");
 });
 
+test("canvas math spacing preserves prose runs without joining them to handwritten math", () => {
+  const adaptor = liteAdaptor(); RegisterHTMLHandler(adaptor);
+  const aliases = glyphAliases(["a", "b", "c", "ab", "abc", "x", "cx"].map(s => glyph(s)));
+  const render = (preserveText) => {
+    const tex = new TeX({ packages: ["base", "ams"] });
+    tex.postFilters.add(({ data }) => applyMathMargins(data.root, aliases, defaults, { preserveText }));
+    const doc = mathjax.document("", { InputJax: tex, OutputJax: new SVG({ fontCache: "none" }) });
+    const output = doc.convert(String.raw`a\text{b}\text{c}x+\text{Total chips}`, { display: true });
+    const groups = adaptor.tags(output, "g");
+    return {
+      text: groups.filter(g => adaptor.getAttribute(g, "data-mml-node") === "mtext"),
+      units: groups.filter(g => adaptor.hasAttribute(g, "data-writing-unit")),
+    };
+  };
+  const canvas = render(true), writing = render(false);
+  assert.equal(canvas.text.length, 3);
+  assert.equal(canvas.units.length, 3); // Only a, x and +, never a prose character or ab/cx.
+  assert.ok(canvas.text.every(node => !adaptor.hasAttribute(adaptor.parent(node), "data-writing-unit")));
+  assert.ok(writing.units.length > canvas.units.length);
+  assert.equal(glyphAliases([glyph(String.raw`\sqrt{}`)]).has("√"), false); // Structural roots require an explicit geometry fallback.
+});
+
 test("text preserves lines, wraps, reports missing characters, and bounds horizontal operators", () => {
   const aliases = new Map([["x", glyph("x")], ["-", glyph("-", 96, 8)]]);
   const result = layoutText("xx - a\nxxxy", aliases, defaults, 90);

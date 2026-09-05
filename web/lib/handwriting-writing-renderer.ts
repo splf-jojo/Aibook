@@ -13,7 +13,9 @@ import {
 
 const adaptor = liteAdaptor();
 RegisterHTMLHandler(adaptor);
-const newDocument = (spacing?: { aliases: ReadonlyMap<string, WritingGlyph>; settings: WritingSettings }) => {
+type MathSpacing = { aliases: ReadonlyMap<string, WritingGlyph>; settings: WritingSettings; preserveText?: boolean };
+export type WritingRenderOptions = { target?: "writing" | "canvas" };
+const newDocument = (spacing?: MathSpacing) => {
   const input = new TeX({ packages: ["base", "ams"], maxBuffer: 4000, maxMacros: 200 });
   input.postFilters.add(({ data }: { data: { root: MmlNode } }) => data.root.walkTree((node) => {
     // A stretched bracket may consist of several font paths. Keep its original
@@ -23,7 +25,7 @@ const newDocument = (spacing?: { aliases: ReadonlyMap<string, WritingGlyph>; set
       token.attributes.set("data-writing-text", token.getText());
     }
   }));
-  if (spacing) input.postFilters.add(({ data }: { data: { root: AbstractMmlNode } }) => applyMathMargins(data.root, spacing.aliases, spacing.settings));
+  if (spacing) input.postFilters.add(({ data }: { data: { root: AbstractMmlNode } }) => applyMathMargins(data.root, spacing.aliases, spacing.settings, spacing));
   return mathjax.document("", { InputJax: input, OutputJax: new SVG({ fontCache: "none" }) });
 };
 const escape = (value: string) => value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!);
@@ -60,7 +62,7 @@ export function cleanLatex(input: string) {
   return source;
 }
 
-function svgDocument(input: string, spacing?: { aliases: ReadonlyMap<string, WritingGlyph>; settings: WritingSettings }) {
+function svgDocument(input: string, spacing?: MathSpacing) {
   const unsupported = input.match(/\\(?:require|href|url|class|style|cssId|includegraphics|html\w*|def|gdef|edef|xdef|let|newcommand|renewcommand|newenvironment|renewenvironment|catcode|input|include|write|openout|special)\b/g);
   if (unsupported) throw new Error(`Unsupported commands: ${[...new Set(unsupported)].join(", ")}`);
   // A new TeX processor prevents user-defined state leaking between expressions.
@@ -84,7 +86,7 @@ function textOf(element: Element) {
     ? normalizeMathCharacter(String.fromCodePoint(parseInt(item.getAttribute("data-c")!, 16))) : item.textContent ?? "").join("").replace(invisibleMath, "");
 }
 
-function finish(placements: WritingPlacement[], width: number, height: number, size: number, structures = "", structureBounds: Box[] = []) {
+function finish(placements: WritingPlacement[], width: number, height: number, size: number, structures = "", structureBounds: Box[] = [], transparent = false) {
   const padding = size * 0.35;
   const boxes = [...structureBounds, ...placements.flatMap((p) => [p.outer, glyphBounds(p, p.angle)])];
   const left = Math.min(0, ...boxes.map((b) => b.x)), top = Math.min(0, ...boxes.map((b) => b.y));
@@ -97,15 +99,17 @@ function finish(placements: WritingPlacement[], width: number, height: number, s
   }).join("");
   const w = Math.max(1, right - left + padding * 2), h = Math.max(size, bottom - top + padding * 2);
   if (w * h > 12_000_000 || w > 10000 || h > 16000) throw new Error("Output is too large. Shorten the input or reduce its size.");
-  return { width: w, height: h, origin, svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${number(w)}" height="${number(h)}" viewBox="0 0 ${number(w)} ${number(h)}"><rect width="100%" height="100%" fill="white"/><g transform="translate(${number(origin.x)} ${number(origin.y)})">${structures}${content}</g></svg>` };
+  return { width: w, height: h, origin, svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${number(w)}" height="${number(h)}" viewBox="0 0 ${number(w)} ${number(h)}">${transparent ? "" : '<rect width="100%" height="100%" fill="white"/>'}<g transform="translate(${number(origin.x)} ${number(origin.y)})">${structures}${content}</g></svg>` };
 }
 
-export function renderWriting(input: string, mode: "text" | "latex", glyphs: WritingGlyph[], settings: WritingSettings, availableWidth: number): WritingResult {
+/** Canvas LaTeX keeps prose and unavailable symbols as readable MathJax outlines. */
+export function renderWriting(input: string, mode: "text" | "latex", glyphs: WritingGlyph[], settings: WritingSettings, availableWidth: number, options: WritingRenderOptions = {}): WritingResult {
   if (input.length > MAX_WRITING_LENGTH) throw new Error(`Maximum ${MAX_WRITING_LENGTH} characters.`);
+  const canvas = options.target === "canvas";
   const aliases = glyphAliases(glyphs);
   if (mode === "text") {
     const layout = layoutText(input, aliases, settings, Math.max(100, availableWidth - settings.size * 0.7));
-    return { ...finish(layout.placements, layout.width, layout.height, settings.size), placements: layout.placements, missing: layout.missing, unsupported: [] };
+    return { ...finish(layout.placements, layout.width, layout.height, settings.size, "", [], canvas), placements: layout.placements, missing: layout.missing, unsupported: [] };
   }
   const original = svgDocument(input), scale = settings.size / 1000;
   const sizeSvg = ({ svg, viewBox }: typeof original) => {
@@ -114,7 +118,7 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
   };
   sizeSvg(original);
   const preview = { svg: original.svg.outerHTML, width: original.viewBox[2] * scale, height: original.viewBox[3] * scale };
-  const layout = svgDocument(input, { aliases, settings });
+  const layout = svgDocument(input, { aliases, settings, preserveText: canvas });
   sizeSvg(layout);
   const { svg, viewBox: [vx, vy, vw, vh] } = layout;
   const host = document.createElement("div");
@@ -140,6 +144,15 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
     const atoms = [...svg.querySelectorAll<SVGGraphicsElement>('[data-writing-unit], [data-mml-node="mi"], [data-mml-node="mo"], [data-mml-node="mn"], [data-mml-node="mtext"]')]
       .filter(visible).filter((element) => element.hasAttribute("data-writing-unit") || !element.closest("[data-writing-unit]"));
     const consumed = new Set<Element>(), placements: WritingPlacement[] = [], missing = new Set<string>(), unsupported = new Set<string>();
+    const preserved: SVGGraphicsElement[] = [], fontFallback = new Set<string>();
+    const preserve = (element: SVGGraphicsElement, label?: string, absent = true) => {
+      preserved.push(element);
+      if (label) {
+        const name = missingLabel(label);
+        fontFallback.add(name);
+        if (absent) missing.add(name);
+      }
+    };
     const add = (box: Box, label: string, glyph: WritingGlyph | undefined, element: SVGGraphicsElement) => {
       if (box.width <= 0 || box.height <= 0) return;
       const fontScale = Math.hypot(matrix(element).a, matrix(element).b);
@@ -158,11 +171,26 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
       const atom = atoms[i]; if (consumed.has(atom)) continue;
       const label = textOf(atom); if (!label.trim()) continue;
       const glyph = aliases.get(label);
+      if (canvas && atom.getAttribute("data-mml-node") === "mtext") {
+        preserve(atom); consumed.add(atom); continue;
+      }
+      // The radical path is generated by MathJax outside the TeX token tree.
+      // A sample of a full handwritten root includes its overbar; fitting it
+      // into only the radical's hook duplicates that bar and can cut the root.
+      // Keep the original hook plus MathJax's structural bar until the dataset
+      // has stretchable radical parts. The radicand still uses real medoids.
+      const generatedRadical = atom.getAttribute("data-mml-node") === "mo" &&
+        ["msqrt", "mroot"].includes(atom.parentElement?.getAttribute("data-mml-node") ?? "");
+      if (canvas && generatedRadical) {
+        const available = glyphs.some((item) => /^(?:\\sqrt\s*\{\s*\}|√)$/.test(item.latex.trim()));
+        preserve(atom, "√", !available); consumed.add(atom); continue;
+      }
       // Join adjacent atoms only within one baseline run. dx must not consume an
       // x inside a superscript or across the numerator/denominator of a fraction.
       let joined = label, matched = false, previous = atom;
       for (let j = i + 1; j < Math.min(atoms.length, i + 8); j++) {
         const next = atoms[j];
+        if (canvas && next.getAttribute("data-mml-node") === "mtext") break;
         if (atom.hasAttribute("data-writing-unit") || previous.nextElementSibling !== next || next.parentElement !== atom.parentElement) break;
         joined += textOf(next); previous = next;
         const compound = aliases.get(joined);
@@ -173,26 +201,44 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
         atoms.slice(i, j + 1).forEach((item) => consumed.add(item)); matched = true; break;
       }
       if (matched) continue;
-      if (glyph || atom.hasAttribute("data-writing-text") || atom.hasAttribute("data-writing-unit")) { add(bounds(atom), label, glyph, atom); consumed.add(atom); continue; }
+      if (glyph || atom.hasAttribute("data-writing-text") || atom.hasAttribute("data-writing-unit")) {
+        if (canvas && !glyph) preserve(atom, label);
+        else add(bounds(atom), label, glyph, atom);
+        consumed.add(atom); continue;
+      }
       const paths = [...atom.querySelectorAll<SVGGraphicsElement>("path[data-c], text")];
       for (const path of paths) {
         const code = path.getAttribute("data-c"), text = (code ? normalizeMathCharacter(String.fromCodePoint(parseInt(code, 16))) : path.textContent ?? "").replace(invisibleMath, "");
         if (!text.trim()) continue;
-        add(bounds(path), text, aliases.get(text), atom);
+        const item = aliases.get(text);
+        if (canvas && !item) preserve(path, text);
+        else add(bounds(path), text, item, atom);
       }
       consumed.add(atom);
     }
     const structureElements = [...svg.querySelectorAll<SVGGraphicsElement>("rect, line, path:not([data-c])")].filter(visible).filter((element) => !atoms.some((atom) => atom.contains(element)));
-    const structures = structureElements.map((element) => {
-      const m = matrix(element), clone = element.cloneNode(true) as SVGGraphicsElement;
-      clone.removeAttribute("transform"); clone.setAttribute("fill", "#252822");
-      if (element.tagName.toLowerCase() === "line") { clone.setAttribute("stroke", "#252822"); clone.setAttribute("stroke-width", "35"); }
-      return `<g transform="matrix(${m.a * scale} ${m.b * scale} ${m.c * scale} ${m.d * scale} ${(m.e - vx) * scale} ${(m.f - vy) * scale})">${clone.outerHTML}</g>`;
-    }).join("");
-    for (const path of svg.querySelectorAll("path[data-c], text")) {
-      if (visible(path) && !atoms.some((atom) => atom.contains(path))) unsupported.add(path.closest("[data-mml-node]")?.getAttribute("data-mml-node") ?? "symbol layout");
+    for (const path of svg.querySelectorAll<SVGGraphicsElement>("path[data-c], text")) {
+      if (visible(path) && !atoms.some((atom) => atom.contains(path))) {
+        unsupported.add(path.closest("[data-mml-node]")?.getAttribute("data-mml-node") ?? "symbol layout");
+        // Unknown output layouts must remain visible in the actual solution.
+        if (canvas) {
+          const code = path.getAttribute("data-c");
+          const label = code ? normalizeMathCharacter(String.fromCodePoint(parseInt(code, 16))) : path.textContent ?? "";
+          preserve(path, label.replace(invisibleMath, ""));
+        }
+      }
     }
-    return { ...finish(placements, vw * scale, vh * scale, settings.size, structures, structureElements.map(bounds)), placements, missing: [...missing], unsupported: [...unsupported], preview };
+    const renderElement = (element: SVGGraphicsElement, structure: boolean) => {
+      const m = matrix(element), clone = element.cloneNode(true) as SVGGraphicsElement;
+      clone.removeAttribute("transform");
+      if (structure) {
+        clone.setAttribute("fill", "#252822");
+        if (element.tagName.toLowerCase() === "line") { clone.setAttribute("stroke", "#252822"); clone.setAttribute("stroke-width", "35"); }
+      }
+      return `<g fill="#252822" stroke="#252822" stroke-width="0" color="#252822"${structure ? "" : ' data-font-fallback="true"'} transform="matrix(${m.a * scale} ${m.b * scale} ${m.c * scale} ${m.d * scale} ${(m.e - vx) * scale} ${(m.f - vy) * scale})">${clone.outerHTML}</g>`;
+    };
+    const structures = structureElements.map((element) => renderElement(element, true)).join("") + preserved.map((element) => renderElement(element, false)).join("");
+    return { ...finish(placements, vw * scale, vh * scale, settings.size, structures, [...structureElements, ...preserved].map(bounds), canvas), placements, missing: [...missing], unsupported: [...unsupported], ...(canvas ? { fontFallback: [...fontFallback] } : {}), preview };
   } finally { host.remove(); }
 }
 

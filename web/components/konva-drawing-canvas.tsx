@@ -52,6 +52,9 @@ import { API_URL, apiHeaders, type CanvasRecord, type CanvasPage } from "@/lib/c
 import { PdfPageBackground } from "@/components/pdf-page-background";
 import { findSolutionSpace } from "@/lib/solution-placement";
 import { CANVAS_AI_TEXT } from "@/lib/canvas-ai-text";
+import { CanvasHandwriting, useCanvasHandwriting } from "./canvas-handwriting";
+import type { HandwritingSnapshot } from "@/lib/canvas-handwriting";
+import { createSolutionHistoryEntry, undoSolution, redoSolution, type SolutionHistoryEntry } from "@/lib/canvas-solution-history";
 
 type Tool = "brush" | "eraser" | "select";
 type EraserMode = "normal" | "object";
@@ -136,6 +139,7 @@ type ImageElement = {
   latex?: string;
   formulaInstanceId?: string;
   solutionId?: string;
+  handwriting?: HandwritingSnapshot;
   latexTemplateId?: string;
 };
 
@@ -1170,6 +1174,8 @@ export function KonvaDrawingCanvas({
   const [pendingAiImage, setPendingAiImage] = useState<ExportedImage | null>(null);
   const [loadingChatId, setLoadingChatId] = useState<string | null>(null);
   const [solution, setSolution] = useState<CanvasSolution | null>(null);
+  const handwriting = useCanvasHandwriting(token, canvas.id);
+  const [solutionHistory, setSolutionHistory] = useState<SolutionHistoryEntry | null>(null);
   const [draftPageIndex, setDraftPageIndex] = useState(0);
   const [inkProgress, setInkProgress] = useState({ step: 0, progress: 0 });
   const [aiError, setAiError] = useState<string | null>(null);
@@ -1735,6 +1741,7 @@ export function KonvaDrawingCanvas({
       elements: [...page.elements, ...accepted.pieces.filter((piece) => piece.pageIndex === index).map((piece) => piece.element)],
       appleDrawingData: accepted.pieces.some((piece) => piece.pageIndex === index) ? undefined : page.appleDrawingData,
     }));
+    setSolutionHistory(createSolutionHistoryEntry(canvasPagesRef.current, pages, accepted.id));
     canvasPagesRef.current = pages;
     activePageIndexRef.current = draftPageIndex;
     elementsRef.current = pages[draftPageIndex].elements as SceneElement[];
@@ -1750,6 +1757,25 @@ export function KonvaDrawingCanvas({
     aiSubmitRef.current = false;
   };
 
+  const changeSolutionHistory = async (direction: "undo" | "redo") => {
+    if (!solutionHistory || canvasAiBusy || aiSubmitRef.current || photoLoading) return;
+    aiSubmitRef.current = true;
+    setAiError(null);
+    const current = canvasPagesRef.current.map((page, index) => index === activePageIndexRef.current ? { ...page, elements: elementsRef.current } : page);
+    const pageId = current[activePageIndexRef.current]?.id;
+    const result = direction === "undo" ? undoSolution(current, solutionHistory) : redoSolution(current, solutionHistory);
+    const index = Math.max(0, result.pages.findIndex(page => page.id === pageId));
+    setSolutionHistory(result.entry);
+    canvasPagesRef.current = result.pages;
+    activePageIndexRef.current = index;
+    elementsRef.current = result.pages[index].elements as SceneElement[];
+    setActivePageIndex(index);
+    setElements(elementsRef.current);
+    setSelectedIds([]); setSelection(null); selectionRef.current = null;
+    if (!await queueCanvasSave()) setAiError(text.acceptedSaveFailed);
+    aiSubmitRef.current = false;
+  };
+
   const runCanvasSolution = async (chatId: string, prompt: string, selectionImage: ExportedImage | null, controller: AbortController) => {
     sidebarRequestRef.current = controller;
     setSidebarOpen(true);
@@ -1758,6 +1784,8 @@ export function KonvaDrawingCanvas({
     setAiError(null);
     let preparingFormulas = false;
     try {
+      const handwritingDataset = await handwriting.loadForSolution(controller.signal);
+      if (controller.signal.aborted) return;
       const data = new FormData();
       if (selectionImage) {
         const image = await fetch(selectionImage.dataUrl).then((response) => response.blob());
@@ -1779,7 +1807,8 @@ export function KonvaDrawingCanvas({
         return;
       }
       preparingFormulas = true;
-      const { renderLatexImage, renderBarChart } = await import("@/lib/latex-image");
+      const { renderBarChart } = await import("@/lib/latex-image");
+      const { renderCanvasHandwriting } = await import("@/lib/canvas-handwriting-renderer");
       const context = taskContextRef.current.get(chatId);
       const pages: CanvasPage[] = canvasPagesRef.current.map((page, index) => ({
         ...page, elements: index === activePageIndexRef.current ? [...elementsRef.current] : [...page.elements],
@@ -1791,8 +1820,8 @@ export function KonvaDrawingCanvas({
       for (let stepIndex = 0; stepIndex < payload.steps.length; stepIndex++) {
         if (controller.signal.aborted) return;
         const step = payload.steps[stepIndex];
-        const images = step.latex.trim() ? [{ ...await renderLatexImage(step.latex), source: "latex" as const, latex: step.latex }] : [];
-        const blocks: Array<ExportedImage & { source: "latex" | "ai-chart"; latex?: string }> = [...images];
+        const images = step.latex.trim() ? [{ ...await renderCanvasHandwriting(step.latex, handwritingDataset), source: "latex" as const, latex: step.latex }] : [];
+        const blocks: Array<ExportedImage & { source: "latex" | "ai-chart"; latex?: string; handwriting?: HandwritingSnapshot }> = [...images];
         if (step.chart) blocks.push({ ...renderBarChart(step.chart), source: "ai-chart" });
         for (const block of blocks) {
           const occupied = (pages[pageIndex].elements as SceneElement[]).map(sceneElementBounds)
@@ -2910,6 +2939,11 @@ export function KonvaDrawingCanvas({
               )}
             </div>
           </div>
+          <CanvasHandwriting model={handwriting} language={language} disabled={canvasAiBusy || photoLoading || saveState === "saving"}
+            snapshots={(solution ? solution.pieces.map(piece => piece.element) : visibleElements)
+              .flatMap(element => element.kind === "image" && element.handwriting ? [element.handwriting] : [])}
+            historyState={solutionHistory?.state}
+            onUndo={() => void changeSolutionHistory("undo")} onRedo={() => void changeSolutionHistory("redo")} />
           {(solution || sidebarBusy) && (
             <div className="mx-3 mb-3 rounded-xl border border-[#dfe3e8] bg-[#eff6ff] p-3" aria-live="polite">
               <div className="flex items-center gap-2 text-sm font-medium text-[#2563eb]">

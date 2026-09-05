@@ -15,6 +15,8 @@ export type Box = { x: number; y: number; width: number; height: number };
 export type WritingPlacement = Box & { label: string; glyph?: WritingGlyph; angle: number; cell: Box; content: Box; outer: Box; padding: Insets; margin: Insets };
 export type WritingResult = {
   svg: string; width: number; height: number; missing: string[]; unsupported: string[];
+  /** Math symbols kept as font outlines in canvas output; prose is excluded. */
+  fontFallback?: string[];
   preview?: { svg: string; width: number; height: number }; placements: WritingPlacement[]; origin: { x: number; y: number };
 };
 

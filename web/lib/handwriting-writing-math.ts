@@ -6,7 +6,7 @@ const text = (node: MmlNode) => isToken(node) ? (node as AbstractMmlTokenNode).g
 
 /** Give ordinary symbols a shared ascent/descent before MathJax layout.
  * Scripts and fractions retain their structure; large operators keep theirs. */
-export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<string, WritingGlyph>, settings: WritingSettings) {
+export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<string, WritingGlyph>, settings: WritingSettings, options: { preserveText?: boolean } = {}) {
   const margin = scaleInsets(settings.margin);
   const factory = root.factory;
   const em = (px: number) => `${px / settings.size}em`;
@@ -21,6 +21,9 @@ export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<str
   };
   const transform = (node: MmlNode): MmlNode => {
     if (["mphantom", "merror", "annotation", "annotation-xml"].includes(node.kind)) return node;
+    // Canvas explanations remain one font run. Splitting mtext into individual
+    // glyph cells would alter its kerning and mix prose with handwritten math.
+    if (options.preserveText && node.kind === "mtext") return node;
     if (isToken(node)) {
       const value = text(node);
       if (!value.trim()) return node;
@@ -42,8 +45,9 @@ export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<str
     for (let i = 0; i < children.length; i++) {
       let end = i, joined = text(children[i]);
       // Join only adjacent atoms of one row, never across a script or fraction.
-      if (["mrow", "inferredMrow"].includes(node.kind) && joined) {
+      if (["mrow", "inferredMrow"].includes(node.kind) && joined && !(options.preserveText && children[i].kind === "mtext")) {
         for (let j = i + 1; j < Math.min(children.length, i + 8); j++) {
+          if (options.preserveText && children[j].kind === "mtext") break;
           const value = text(children[j]);
           if (!value || !isToken(children[j])) break;
           joined += value;

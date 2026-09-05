@@ -1,0 +1,11 @@
+.panel { flex-shrink: 0; margin: 0 12px 12px; color: var(--muted); font-size: 12px; }
+.row { display: flex; align-items: center; gap: 10px; }
+.row label { flex-shrink: 0; }
+.row select { min-width: 0; width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 7px 8px; background: var(--surface); color: var(--foreground); text-overflow: ellipsis; }
+.row select:disabled { opacity: .6; }
+.notice { margin-top: 8px; line-height: 1.6; overflow-wrap: anywhere; }
+.notice summary { cursor: pointer; }
+.notice a, .notice button { color: var(--accent); text-decoration: underline; }
+.notice p { margin-top: 4px; }
+.history { margin-top: 8px; padding: 5px 0; color: var(--accent); }
+.history:disabled { opacity: .45; }
