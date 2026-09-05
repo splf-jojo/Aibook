@@ -34,6 +34,9 @@ class User(Base):
     canvases: Mapped[list["CanvasDocument"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    note_groups: Mapped[list["NoteGroup"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class ImageTransfer(Base):
@@ -85,6 +88,17 @@ class AiChatMessage(Base):
     chat: Mapped[AiChat] = relationship(back_populates="messages")
 
 
+class NoteGroup(Base):
+    __tablename__ = "note_groups"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    user: Mapped[User] = relationship(back_populates="note_groups")
+
+
 class CanvasDocument(Base):
     __tablename__ = "canvases"
 
@@ -93,6 +107,9 @@ class CanvasDocument(Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     title: Mapped[str] = mapped_column(String(120))
+    group_id: Mapped[str | None] = mapped_column(
+        ForeignKey("note_groups.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     content: Mapped[dict[str, object]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
