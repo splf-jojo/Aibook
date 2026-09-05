@@ -5,8 +5,8 @@ import Link from "next/link";
 import katex from "katex";
 import { Check, Download, FileUp, LoaderCircle, Pencil, RotateCcw, X } from "lucide-react";
 import {
-  approveDataset, datasetFingerprint, datasetStats, decide, exportDataset, freshReview, MAX_IMPORT_BYTES,
-  MIN_EXAMPLES, parseDataset, undoDecision, type Candidate, type Decision, type Review, type ReviewSession,
+  approveDataset, datasetFingerprint, datasetStats, decide, exportDataset, reviewForImport, MAX_IMPORT_BYTES,
+  MIN_EXAMPLES, parseDataset, undoDecision, type Candidate, type Decision, type Review, type ReviewIssue, type ReviewSession,
 } from "@/lib/handwriting-dataset";
 import { readSession, saveSession } from "@/lib/handwriting-review-storage";
 import styles from "./handwriting-review.module.css";
@@ -14,6 +14,13 @@ import styles from "./handwriting-review.module.css";
 type Mode = "queue" | "gallery";
 type Filter = "all" | "pending" | "accepted" | "rejected";
 const statusLabels = { pending: "Не проверен", accepted: "Принят", rejected: "Отклонён" };
+const issueLabels: Record<ReviewIssue, string> = {
+  "incorrect-outline": "Символ верный, обводка неверная",
+  "incorrect-symbol": "Обводка верная, символ неверный",
+};
+function decisionLabel(decision?: Decision) {
+  return decision?.issue ? issueLabels[decision.issue] : statusLabels[decision?.status ?? "pending"];
+}
 
 function math(latex: string): { html: string; valid: boolean } {
   try {
@@ -36,7 +43,7 @@ function download(value: unknown, filename: string) {
 
 function ReviewCard({ sample, decision, index, total, busy, onDecide, onUndo, canUndo }: {
   sample: Candidate; decision?: Decision; index: number; total: number; busy: boolean;
-  onDecide: (status: Decision["status"], latex: string) => void; onUndo: () => void; canUndo: boolean;
+  onDecide: (status: Decision["status"], latex: string, issue?: ReviewIssue) => void; onUndo: () => void; canUndo: boolean;
 }) {
   const [label, setLabel] = useState(decision?.latex ?? sample.latex);
   const [editing, setEditing] = useState(false);
@@ -53,6 +60,9 @@ function ReviewCard({ sample, decision, index, total, busy, onDecide, onUndo, ca
       if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable=true], [role=dialog]")) return;
       if (event.key === "ArrowLeft") { event.preventDefault(); onDecide("rejected", valid ? label : sample.latex); }
       if (event.key === "ArrowRight" && canAccept) { event.preventDefault(); onDecide("accepted", label); }
+      if (canAccept && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+        event.preventDefault(); onDecide("rejected", label, event.key === "ArrowUp" ? "incorrect-outline" : "incorrect-symbol");
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -61,7 +71,7 @@ function ReviewCard({ sample, decision, index, total, busy, onDecide, onUndo, ca
   return <section className={styles.card} aria-label="Проверка символа" aria-busy={busy}>
     <div className={styles.cardTop}>
       <span aria-label={`Образец ${index + 1} из ${total}`}>{index + 1} / {total}</span>
-      {decision && <span className={styles[decision.status]}>{statusLabels[decision.status]}</span>}
+      {decision && <span className={styles[decision.status]}>{decisionLabel(decision)}</span>}
       <button className={styles.iconButton} onClick={onUndo} disabled={busy || !canUndo}
         aria-label="Отменить последнее решение" title="Отменить последнее решение"><RotateCcw size={17} /></button>
     </div>
@@ -87,6 +97,14 @@ function ReviewCard({ sample, decision, index, total, busy, onDecide, onUndo, ca
       </button>
       <button className={styles.primaryButton} onClick={() => onDecide("accepted", label)} disabled={busy || !canAccept || editing}>
         Принять<kbd>→</kbd>
+      </button>
+      <button className={`${styles.secondaryButton} ${styles.issueButton}`} disabled={busy || !canAccept || editing}
+        onClick={() => onDecide("rejected", label, "incorrect-outline")} aria-label={issueLabels["incorrect-outline"]}>
+        <kbd>↑</kbd><span>Символ верный<br />Обводка неверная</span>
+      </button>
+      <button className={`${styles.secondaryButton} ${styles.issueButton}`} disabled={busy || !canAccept || editing}
+        onClick={() => onDecide("rejected", label, "incorrect-symbol")} aria-label={issueLabels["incorrect-symbol"]}>
+        <span>Обводка верная<br />Символ неверный</span><kbd>↓</kbd>
       </button>
     </div>
     <details className={styles.context}>
@@ -145,7 +163,7 @@ export function HandwritingReview() {
       if (dataset.samples.some((item) => !math(item.latex).valid)) throw new Error("В наборе есть некорректный LaTeX. Исправьте подписи в файле перед импортом.");
       const fingerprint = await datasetFingerprint(dataset);
       const saved = await readSession(fingerprint);
-      const next = saved ?? { dataset, fingerprint, review: freshReview() };
+      const next = saved ?? { dataset, fingerprint, review: reviewForImport(dataset, session) };
       await saveSession(next, saved);
       setSession(next); setSelectedId(null); setFilter("all"); setSearch(""); setVisibleCount(60);
       setMode(dataset.samples.some((item) => !next.review.decisions[item.id]) ? "queue" : "gallery");
@@ -153,10 +171,10 @@ export function HandwritingReview() {
     finally { locked.current = false; setBusy(false); }
   }
 
-  const onDecide = useCallback((status: Decision["status"], label: string) => {
+  const onDecide = useCallback((status: Decision["status"], label: string, issue?: ReviewIssue) => {
     if (!session || !sample || locked.current) return;
     if (status === "accepted" && !math(label).valid) return;
-    const review = decide(session.review, sample, status, label);
+    const review = decide(session.review, sample, status, label, undefined, issue);
     void persist(review, () => {
       const start = session.dataset.samples.findIndex((item) => item.id === sample.id);
       const ordered = [...session.dataset.samples.slice(start + 1), ...session.dataset.samples.slice(0, start)];
@@ -245,11 +263,13 @@ export function HandwritingReview() {
           {filtered.slice(0, visibleCount).map((item) => {
             const decision = session.review.decisions[item.id], status = decision?.status ?? "pending";
             return <button className={styles.galleryCard} key={item.id} disabled={busy}
-              aria-label={"Проверить " + (decision?.latex ?? item.latex) + ", " + statusLabels[status] + ", " + item.id}
+              aria-label={"Проверить " + (decision?.latex ?? item.latex) + ", " + decisionLabel(decision) + ", " + item.id}
+              title={decisionLabel(decision)}
               onClick={() => { setSelectedId(item.id); setMode("queue"); }}>
               <div><Latex value={decision?.latex ?? item.latex} />
-                <span className={styles[status]} title={statusLabels[status]} aria-label={statusLabels[status]}>
-                  {status === "accepted" ? <Check size={16} /> : status === "rejected" ? <X size={16} /> : <span className={styles.dot} />}
+                <span className={styles[status]} title={decisionLabel(decision)} aria-label={decisionLabel(decision)}>
+                  {decision?.issue ? <span className={styles.issueMark}>{decision.issue === "incorrect-outline" ? "↑" : "↓"}</span>
+                    : status === "accepted" ? <Check size={16} /> : status === "rejected" ? <X size={16} /> : <span className={styles.dot} />}
                 </span>
               </div>
               <img src={item.image} alt={"Образец " + (decision?.latex ?? item.latex)} loading="lazy" />

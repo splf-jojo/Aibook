@@ -36,6 +36,8 @@
 .secondaryButton:hover:not(:disabled) { background: #f0f1ec; }
 .decisions button { min-height: 50px; }
 .decisions kbd { font: inherit; opacity: .7; }
+.decisions .issueButton { font-size: 12px; padding: 10px 8px; line-height: 1.5; min-height: 62px; }
+.issueMark { font-size: 17px; }
 .context { margin-top: 24px; font-size: 12px; color: var(--muted); }
 .context summary { text-align: center; cursor: pointer; min-height: 40px; padding: 10px; list-style: none; }
 .context summary::-webkit-details-marker { display: none; }

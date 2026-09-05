@@ -22,7 +22,8 @@ export type CandidateDataset = {
   samples: Candidate[];
 };
 
-export type Decision = { status: "accepted" | "rejected"; latex: string; reviewedAt: string };
+export type ReviewIssue = "incorrect-outline" | "incorrect-symbol";
+export type Decision = { status: "accepted" | "rejected"; latex: string; reviewedAt: string; issue?: ReviewIssue };
 export type Review = {
   decisions: Record<string, Decision>;
   history: { id: string; previous: Decision | null }[];
@@ -35,6 +36,14 @@ export type ReviewSession = { fingerprint: string; dataset: CandidateDataset; re
 export const MIN_EXAMPLES = 3;
 export const MAX_IMPORT_BYTES = 40 * 1024 * 1024;
 export const freshReview = (): Review => ({ decisions: {}, history: [], revision: 0, inspectedRevision: null, approvedAt: null });
+
+/** Carry decisions only when this is an exact extension of the active pack. */
+export function reviewForImport(dataset: CandidateDataset, previous: ReviewSession | null): Review {
+  if (!previous || dataset.samples.length <= previous.dataset.samples.length) return freshReview();
+  const samples = new Map(dataset.samples.map((sample) => [sample.id, JSON.stringify(sample)]));
+  if (!previous.dataset.samples.every((sample) => samples.get(sample.id) === JSON.stringify(sample))) return freshReview();
+  return { ...previous.review, revision: previous.review.revision + 1, inspectedRevision: null, approvedAt: null };
+}
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Некорректный формат набора.");
@@ -90,11 +99,14 @@ export async function datasetFingerprint(dataset: CandidateDataset): Promise<str
   return [...new Uint8Array(hash)].map((v) => v.toString(16).padStart(2, "0")).join("");
 }
 
-export function decide(review: Review, sample: Candidate, status: Decision["status"], latex: string, now = new Date().toISOString()): Review {
+export function decide(review: Review, sample: Candidate, status: Decision["status"], latex: string, now = new Date().toISOString(), issue?: ReviewIssue): Review {
   const label = text(latex, 80);
+  if (issue && (status !== "rejected" || !["incorrect-outline", "incorrect-symbol"].includes(issue))) {
+    throw new Error("Образец с ошибкой нельзя принять.");
+  }
   return {
     ...review,
-    decisions: { ...review.decisions, [sample.id]: { status, latex: label, reviewedAt: now } },
+    decisions: { ...review.decisions, [sample.id]: { status, latex: label, reviewedAt: now, ...(issue ? { issue } : {}) } },
     history: [...review.history, { id: sample.id, previous: review.decisions[sample.id] ?? null }].slice(-5000),
     revision: review.revision + 1, inspectedRevision: null, approvedAt: null,
   };
