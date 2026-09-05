@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
 import struct
 import base64
 from typing import Literal
-from uuid import uuid4
+from uuid import uuid4, uuid5
 
 from fastapi import (
     Depends,
@@ -22,8 +22,9 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from .config import settings
@@ -40,6 +41,8 @@ from .schemas import (
     AiChatMessageCreate,
     AiChatMessageResponse,
     AiChatResponse,
+    AiChatReplyRequest,
+    AiChatReplyResponse,
     CanvasCreate,
     CanvasResponse,
     CanvasSummaryResponse,
@@ -373,12 +376,29 @@ async def sidebar_ai(
 
 
 async def owned_chat(
-    chat_id: str, user: User, session: AsyncSession
+    chat_id: str, user: User, session: AsyncSession, *, structured_errors: bool = False
 ) -> AiChat:
     chat = await session.get(AiChat, chat_id)
     if chat is None or chat.user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        # The chat API distinguishes a missing chat from an older deployment's
+        # missing route. Legacy endpoints retain their existing error format.
+        detail = {"code": "chat_not_found", "message": "Chat not found."} if structured_errors else None
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
     return chat
+
+
+async def next_chat_message_time(chat_id: str, session: AsyncSession) -> datetime:
+    # Serialize the short persistence step, not the model request. Equal clock
+    # ticks must never reorder question/answer pairs or consecutive messages.
+    await session.execute(select(AiChat.id).where(AiChat.id == chat_id).with_for_update())
+    latest = await session.scalar(select(func.max(AiChatMessage.created_at))
+                                  .where(AiChatMessage.chat_id == chat_id))
+    now = utc_now()
+    if latest is None:
+        return now
+    if latest.tzinfo is None:  # SQLite stores UTC without its timezone annotation.
+        latest = latest.replace(tzinfo=timezone.utc)
+    return max(now, latest + timedelta(microseconds=1))
 
 
 @app.get("/api/ai/chats", response_model=list[AiChatResponse])
@@ -408,6 +428,105 @@ async def create_ai_chat(
     return chat
 
 
+@app.get("/api/ai/chats/{chat_id}", response_model=AiChatResponse)
+async def get_ai_chat(
+    chat_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> AiChat:
+    chat = await owned_chat(chat_id, user, session, structured_errors=True)
+    await session.refresh(chat, attribute_names=["messages"])
+    return chat
+
+
+def chat_image(data_url: str | None) -> tuple[bytes | None, str]:
+    if data_url is None:
+        return None, "image/png"
+    header, separator, encoded = data_url.partition(",")
+    if not separator or header not in {"data:image/png;base64", "data:image/jpeg;base64"}:
+        raise HTTPException(status_code=415, detail="Attach a PNG or JPEG image")
+    try:
+        payload = base64.b64decode(encoded, validate=True)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Invalid image encoding") from error
+    if not payload or len(payload) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image must be between 1 byte and 20 MiB")
+    mime_type = header[5:-7]
+    if (mime_type == "image/png" and png_dimensions(payload) is None) or (
+        mime_type == "image/jpeg" and not payload.startswith(b"\xff\xd8\xff")
+    ):
+        raise HTTPException(status_code=415, detail="Invalid PNG or JPEG image")
+    return payload, mime_type
+
+
+@app.post("/api/ai/chats/{chat_id}/reply", response_model=AiChatReplyResponse)
+async def reply_to_ai_chat(
+    chat_id: str,
+    payload: AiChatReplyRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> AiChatReplyResponse:
+    await owned_chat(chat_id, user, session, structured_errors=True)
+    user_id = str(payload.request_id)
+    assistant_id = str(uuid5(payload.request_id, "assistant"))
+
+    async def completed_reply() -> AiChatReplyResponse | None:
+        question = await session.get(AiChatMessage, user_id)
+        if question is None:
+            return None
+        if (question.chat_id != chat_id or question.role != "user"
+                or question.content != payload.prompt
+                or question.image_data_url != payload.image_data_url):
+            raise HTTPException(status_code=409, detail="Request ID already used for another message")
+        answer = await session.get(AiChatMessage, assistant_id)
+        if answer is None or answer.chat_id != chat_id or answer.role != "assistant":
+            raise HTTPException(status_code=409, detail="Request ID already used")
+        return AiChatReplyResponse(user_message=question, assistant_message=answer)
+
+    # The client reuses this ID after a lost response. Never append the same turn twice.
+    if completed := await completed_reply():
+        return completed
+    image, mime_type = chat_image(payload.image_data_url)
+    recent = list(await session.scalars(
+        select(AiChatMessage).where(AiChatMessage.chat_id == chat_id)
+        .order_by(AiChatMessage.created_at.desc(), AiChatMessage.id.desc()).limit(16)
+    ))
+    if image is None:
+        previous_image = next((m.image_data_url for m in recent
+                               if m.role == "user" and m.image_data_url), None)
+        if previous_image is not None:
+            image, mime_type = chat_image(previous_image)
+    history = [(m.role, m.content[:8000]) for m in reversed(recent)]
+    language = {"ru": "Russian", "en": "English", "zh": "Simplified Chinese"}[payload.language]
+    try:
+        answer_text = await request_qwen(
+            payload.prompt, image, mime_type, request_id=user_id, history=history,
+            system_prompt=(f"You are a helpful study assistant. Respond in {language}. "
+                           "Use the conversation and any attached handwritten notes as context. "
+                           "Explain clearly, and ask when the task or handwriting is ambiguous."),
+        )
+    except QwenNotConfiguredError as error:
+        raise HTTPException(status_code=503, detail="Qwen API is not configured") from error
+    except QwenRequestError as error:
+        raise HTTPException(status_code=502, detail="Could not prepare a chat reply") from error
+    question_time = await next_chat_message_time(chat_id, session)
+    question = AiChatMessage(id=user_id, chat_id=chat_id, role="user",
+                             content=payload.prompt, image_data_url=payload.image_data_url,
+                             created_at=question_time)
+    answer = AiChatMessage(id=assistant_id, chat_id=chat_id, role="assistant",
+                          content=answer_text, created_at=question_time + timedelta(microseconds=1))
+    session.add_all([question, answer])
+    try:
+        # A failed model call stores neither half of the turn.
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if completed := await completed_reply():
+            return completed
+        raise HTTPException(status_code=409, detail="Request ID already used")
+    return AiChatReplyResponse(user_message=question, assistant_message=answer)
+
+
 @app.post(
     "/api/ai/chats/{chat_id}/messages",
     response_model=AiChatMessageResponse,
@@ -425,6 +544,7 @@ async def create_ai_chat_message(
         role=payload.role,
         content=payload.content,
         image_data_url=payload.image_data_url,
+        created_at=await next_chat_message_time(chat_id, session),
     )
     session.add(message)
     await session.commit()

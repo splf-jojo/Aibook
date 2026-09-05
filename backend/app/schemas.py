@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Annotated, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -147,6 +147,26 @@ class AiChatResponse(BaseModel):
     title: str
     created_at: datetime
     messages: list[AiChatMessageResponse]
+
+
+class AiChatReplyRequest(BaseModel):
+    request_id: UUID
+    prompt: str = Field(min_length=1, max_length=20_000)
+    language: Literal["ru", "en", "zh"] = "en"
+    image_data_url: str | None = Field(default=None, max_length=30_000_000)
+
+    @field_validator("prompt")
+    @classmethod
+    def trim_prompt(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Message must not be empty")
+        return value
+
+
+class AiChatReplyResponse(BaseModel):
+    user_message: AiChatMessageResponse
+    assistant_message: AiChatMessageResponse
 
 
 class CanvasSize(CamelModel):

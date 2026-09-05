@@ -68,6 +68,55 @@ docker compose --env-file .env.production -f docker-compose.production.yml logs 
 docker compose --env-file .env.production -f docker-compose.production.yml up -d --build --wait --wait-timeout 120
 ```
 
+## Обновление API без сборки на ECS
+
+Для сервера с 2 ГБ памяти собирайте образ на ноутбуке. Текущий ECS имеет
+архитектуру `linux/amd64`. Например, в PowerShell из корня проекта:
+
+```powershell
+New-Item -ItemType Directory -Force .runtime/api-release | Out-Null
+docker build --platform linux/amd64 -t aibook-api:release ./backend
+docker image save -o .runtime/api-release/api-image.tar aibook-api:release
+workbench upload .runtime/api-release/api-image.tar /tmp/ -i i-j6c9ch8it9zx4eziq5pi -f
+workbench connect -i i-j6c9ch8it9zx4eziq5pi --new
+```
+
+В терминале сервера загрузите образ, сохраните тег предыдущего образа для
+отката и пересоздайте только API:
+
+```bash
+cd /opt/aibook
+docker load -i /tmp/api-image.tar
+docker tag aibook-api:local aibook-api:previous
+docker tag aibook-api:release aibook-api:local
+docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --no-deps --wait --wait-timeout 60 api
+```
+
+Этот путь подходит для обновления без новых миграций. Если релиз добавляет
+миграции, примените их новым образом до перезапуска API. Вместе с образом
+обновляйте серверную копию `backend/` из того же коммита, чтобы последующая
+сборка из исходников не вернула старую версию. Секреты остаются в существующем
+`.env.production`; их не нужно включать в образ или архив исходников.
+
+После обновления проверяйте и `/health`, и наличие маршрутов, необходимых
+клиенту. Успешный healthcheck старого API не гарантирует совместимость с новым
+iPad-приложением:
+
+```bash
+python3 - <<'PY'
+import json, urllib.request
+with urllib.request.urlopen('http://127.0.0.1/openapi.json') as response:
+    paths = json.load(response)['paths']
+assert 'get' in paths['/api/ai/chats/{chat_id}']
+assert 'post' in paths['/api/ai/chats/{chat_id}/reply']
+print('iPad chat routes are available')
+PY
+```
+
+Для функциональной проверки отправьте в чат PNG и `solve`, продолжите диалог
+без нового изображения, затем загрузите историю. Повтор с тем же `request_id`
+должен вернуть сохранённую пару сообщений без дубликатов.
+
 ## Резервная копия БД
 
 ```bash
