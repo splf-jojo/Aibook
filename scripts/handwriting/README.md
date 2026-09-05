@@ -1,91 +1,103 @@
-# Human review в AIbook
+# Handwriting dev tools — phase 1
 
-`/dev/handwriting` — отдельная страница web-приложения. Ядро проверки находится в
-`web/lib/handwriting-dataset.ts`, локальное хранение — в
-`web/lib/handwriting-review-storage.ts`. Бэкенд и iPad не изменяются.
+- `/dev` — **Labeling** and **Analysis**.
+- `/dev/labeling` — persistent dataset catalog and **Add dataset**.
+- `/dev/labeling/[id]` — human review, gallery, approval and export.
+- `/dev/analysis` — approved datasets; `/dev/analysis/[id]` lists eligible symbols
+  in **Symbol | Heatmap | Medoid** order. Analysis is not implemented in phase 1:
+  **Analyze** is disabled, and no heatmaps or medoids are fabricated.
+- `/dev/handwriting` redirects to the labeling catalog.
 
-## Запуск
+All dev UI labels and errors are English. Follow `docs/UI_DESIGN_PROMPT.md`.
 
-В `next dev` страница включена. Для локального Docker включите её явно:
+## Local run
 
 ```powershell
 $env:HANDWRITING_REVIEW_ENABLED = "1"
 docker compose --env-file .env.production -f docker-compose.production.yml up -d --build --no-deps --wait --wait-timeout 120 web
 ```
 
-Откройте `http://localhost/dev/handwriting`. На обычном production-запуске флаг
-равен `0`, маршрут возвращает 404. Это флаг доступности локального инструмента,
-а не система разграничения доступа. Наборы не публикуются на сервере.
+Open `http://localhost/dev`. The flag defaults to `0` in production. Pages and
+JSON routes additionally require a localhost/loopback Host; mutations require
+same-origin JSON requests. This is a local developer tool, not a public,
+multi-user service. Do not expose its storage or enable it on a public proxy.
 
-## Работа
+Compose mounts `./data/handwriting/datasets` into the web container at
+`/app/data/handwriting/datasets`. Files survive container recreation and browser
+storage cleanup. In `next dev` started from `web/`, the same repository folder
+is used by default. `HANDWRITING_DATA_DIR` overrides the path. A Linux bind mount
+must be writable by the web container user (UID 1001).
 
-1. Загрузите JSON с кандидатами. Для первоначальной проверки подготовлен локальный
-   `output/handwriting/notes-candidates.json`; личные данные не входят в Git.
-2. LaTeX сверху — предполагаемая подпись. Под ним — вырезанный символ; «Контекст»
-   раскрывает исходную формулу с рамкой. Кнопка с карандашом позволяет исправить подпись.
-3. `ArrowLeft` отклоняет, `ArrowRight` принимает и переходит к следующему
-   непроверенному образцу. Удержание клавиши не размечает очередь автоматически.
-   В поле редактирования стрелки перемещают курсор. Пока вырезка и контекст не
-   загрузились, принять образец нельзя.
-   `ArrowUp` — «Символ верный, обводка неверная»; `ArrowDown` — «Обводка верная,
-   символ неверный». Это отклонения с отдельным полем `issue`: `incorrect-outline`
-   или `incorrect-symbol`. Причина сохраняется в истории, после перезагрузки и
-   в аудите экспорта. Такие образцы не учитываются в покрытии принятых символов
-   и не входят в итоговые `samples`. Обычное отклонение не предполагает причины.
-4. «Отменить последнее решение» возвращает предыдущий статус. В «Все образцы»
-   доступны фильтры, поиск LaTeX, покрытие и повторное открытие любого образца.
-5. После решения по каждому образцу просмотрите галерею и нажмите «Принять датасет».
-   Это явное действие фиксирует итоговый просмотр и принятие текущей версии набора.
-   Дополнительная галочка не требуется. Покрытие доступно в разделе «Символы».
-6. «Скачать датасет» экспортирует проверенный JSON. В него входят только принятые
-   образцы символов, набравших минимум **3** принятых примера. Отклонённые и
-   недостаточно представленные символы отражаются в отчёте, но не входят в
-   `samples`. Пустой датасет принять нельзя.
+## Storage and review
 
-Изменение решения, подписи или undo снимает итоговое одобрение. После этого
-требуется повторная проверка галереи и принятие датасета.
+Each dataset has its own directory identified by the SHA-256 of the canonical
+candidate pack:
 
-Все решения сохраняются транзакционно в **IndexedDB текущего браузера и origin**.
-При повторной загрузке того же набора прогресс восстанавливается. SHA-256
-всего нормализованного набора предотвращает перенос решений на изменённые
-картинки или подписи. Одновременная запись из устаревшей вкладки блокируется.
-Между устройствами и разными origin автоматической синхронизации нет. Очистка
-данных сайта удалит локальный прогресс; скачанный финальный датасет останется.
+- `candidates.json` — immutable crops, labels and PDF provenance.
+- `state.json` — display name, review decisions, undo history, approval and version.
+- `original-approved.json` — archived imported approval, when present.
 
-## Формат кандидатов
+The whole `data/handwriting/` tree is ignored by Git and excluded from image
+tracing. Back up this folder separately. Dataset names never become filesystem
+paths. Imports publish a complete directory atomically. Saves use a temporary
+file, flush and atomic rename; version checks and a per-dataset exclusive lock
+prevent stale tabs from overwriting decisions. A save failure leaves the current
+sample on screen with a **Reload** action. If a process is forcibly killed during
+a write, an orphan `.review.lock` may remain: stop the web service before removing
+that specific lock, then restart it. Never remove an active writer's lock.
 
-Один файл до 40 МБ, от 1 до 5000 образцов:
+**Add dataset** accepts candidate JSON up to 40 MB, 1–5000 samples, schema version
+1, kind `handwriting-candidates`. Each sample carries `id`, `latex`, embedded PNG
+`image` and `context`, and `source` with `file`, PDF `sha256`, one-based `page`,
+`pageWidth`, `pageHeight`, and `box: [x, y, width, height]` in PDF points from the
+top left. IDs and source crops must be unique; bounds, LaTeX and PNG data URLs
+are validated. Approval claims inside a candidate file are ignored. New packs
+start unreviewed; importing an identical pack opens its existing decisions.
 
-```json
-{
-  "schemaVersion": 1,
-  "kind": "handwriting-candidates",
-  "name": "Мои записи — очередь 1",
-  "samples": [{
-    "id": "unique-source-crop-id",
-    "latex": "\\partial",
-    "image": "data:image/png;base64,...",
-    "context": "data:image/png;base64,...",
-    "source": {
-      "file": "notes.pdf",
-      "sha256": "SHA-256 исходного PDF, 64 шестнадцатеричных символа",
-      "page": 1,
-      "pageWidth": 612,
-      "pageHeight": 792,
-      "box": [72, 96, 14, 22]
-    }
-  }]
-}
+Review shortcuts: **Left** rejects, **Right** accepts, **Up** records a correct
+symbol with a wrong outline, **Down** records a correct outline with a wrong
+symbol. The two partial outcomes are rejections with an `issue` field. They stay
+in the audit and are excluded from eligible samples. Auto-repeat and shortcuts
+while editing are suppressed. Images must load before acceptance.
+
+The gallery supports filters, label search, correction and undo. **Approve
+dataset** requires a decision on every candidate and at least one symbol with
+three accepted examples. Export and the analysis preview include only symbols
+meeting that threshold. Revising or undoing a decision clears approval.
+
+## Import an existing approved review
+
+Approved exports omit rejected crops and underrepresented symbols. Import them
+with their exact original candidate pack to preserve **all** review decisions:
+
+```powershell
+node scripts/handwriting/import_reviewed.mjs approved.json candidates.json "Dataset name"
 ```
 
-`box` — `[x, y, width, height]` в PDF points, начало координат в левом верхнем
-углу. `image` и `context` — встроенные PNG; внешние URL и SVG на входе запрещены.
-Дубли ID или одной исходной области не допускаются. Любые поля одобрения во
-входном файле игнорируются. При расширении активного набора сохранённые решения
-переносятся, только если все прежние образцы присутствуют без изменений:
-ID, подпись, изображения и источник совпадают полностью. Новые образцы остаются
-непроверенными; окончательное принятие набора требуется заново. В остальных
-случаях новый набор начинает с пустой истории.
+Requires Node 24 and installed `web/node_modules`. The command verifies the
+source fingerprint, decisions, exported samples and exclusions before writing.
+It preserves approval timestamps and archives the original export. Exports do
+not contain undo history, so imported history starts empty. Existing library
+reviews are never overwritten by a repeated import. The old IndexedDB data and
+files in Downloads are not changed. The runtime store no longer uses IndexedDB;
+`handwriting-review-storage.ts` remains only as a legacy recovery helper.
+
+## Local JSON routes
+
+These Next.js routes are under `/dev`, separate from the FastAPI `/api` prefix:
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/dev/datasets` | Catalog summaries, without embedded images |
+| POST | `/dev/datasets` | Import `{ dataset: candidatePack }` |
+| GET | `/dev/datasets/[id]` | Dataset and current review |
+| PATCH | `/dev/datasets/[id]` | Versioned `decide`, `undo` or `approve` command |
+| GET | `/dev/datasets/[id]/analysis` | Approval state and eligible symbol counts |
+
+Every PATCH includes `expectedVersion`. A decide command also includes
+`sampleId`, `status`, `latex`, and optionally `issue`. Responses contain the saved
+`review` and new `version`; undo also returns `selectedId`. Stale writes return
+409. JSON responses are not cached. There is no analysis computation endpoint.
 
 ## Подготовка вырезок
 
@@ -120,20 +132,21 @@ python scripts/handwriting/build_candidates.py --notes C:\path\to\notes --manife
 Первая версия сборщика требует PDF без поворота, с совпадающими media/crop boxes
 и нулевым началом координат; несовместимые документы отклоняются явно.
 
-## Следующий этап
+## Next phase
 
-Результат — одобренные **вырезки и привязки к PDF** (`representation: pdf-crops`),
-не обученный шрифт и не восстановленные траектории PencilKit. Извлечение векторов,
-метрики букв и LaTeX → почерк подключаются после принятия данных. Изменённые при
-этом изображения должны проходить новую проверку, а не наследовать одобрение.
+Phase 2 adds proportional normalization, alignment, heatmaps, medoid selection,
+and saved analysis results keyed to the reviewed data and analysis settings.
+The current output remains reviewed PDF crops, not recovered pen trajectories
+or a trained font. Changed crops must be reviewed again.
 
-## Проверки
+## Checks
 
 ```powershell
 Set-Location web
 node tests/handwriting-dataset.test.mjs
+node tests/handwriting-library.test.mjs
 npm run typecheck
 ```
 
-Для браузерной проверки используйте отдельный искусственный набор. Тестирование
-кнопки принятия не должно одобрять личные образцы за пользователя.
+Browser acceptance tests must use synthetic datasets. Never approve personal
+samples on the user's behalf.

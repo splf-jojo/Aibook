@@ -46,20 +46,20 @@ export function reviewForImport(dataset: CandidateDataset, previous: ReviewSessi
 }
 
 function object(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Некорректный формат набора.");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid dataset format.");
   return value as Record<string, unknown>;
 }
 
 function text(value: unknown, max: number): string {
   if (typeof value !== "string" || !value.trim() || value.length > max || /[\u0000-\u001f]/.test(value)) {
-    throw new Error("В наборе есть пустые или некорректные подписи.");
+    throw new Error("The dataset contains empty or invalid labels.");
   }
   return value.trim();
 }
 
 function png(value: unknown): string {
   if (typeof value !== "string" || value.length > 2_000_000 || !/^data:image\/png;base64,iVBORw0KGgo[A-Za-z0-9+/]*={0,2}$/.test(value)) {
-    throw new Error("Образцы и контекст должны быть встроенными PNG, без внешних ссылок.");
+    throw new Error("Samples and context must be embedded PNG images, without external links.");
   }
   return value;
 }
@@ -67,24 +67,24 @@ function png(value: unknown): string {
 export function parseDataset(input: unknown): CandidateDataset {
   const data = object(input);
   if (data.schemaVersion !== 1 || data.kind !== "handwriting-candidates" || !Array.isArray(data.samples) || !data.samples.length || data.samples.length > 5000) {
-    throw new Error("Нужен набор handwriting-candidates версии 1, от 1 до 5000 образцов.");
+    throw new Error("Expected handwriting-candidates version 1 with 1 to 5000 samples.");
   }
   const ids = new Set<string>(), locations = new Set<string>();
   const samples = data.samples.map((raw): Candidate => {
     const sample = object(raw), source = object(sample.source);
     const id = text(sample.id, 100);
-    if (ids.has(id) || ["__proto__", "constructor", "prototype"].includes(id)) throw new Error("В наборе повторяются или некорректны ID образцов.");
+    if (ids.has(id) || ["__proto__", "constructor", "prototype"].includes(id)) throw new Error("The dataset contains duplicate or invalid sample IDs.");
     ids.add(id);
-    if (typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Нет SHA-256 исходного PDF.");
-    if (!Number.isInteger(source.page) || Number(source.page) < 1 || Number(source.page) > 10000) throw new Error("Некорректный номер страницы.");
+    if (typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Missing source PDF SHA-256.");
+    if (!Number.isInteger(source.page) || Number(source.page) < 1 || Number(source.page) > 10000) throw new Error("Invalid page number.");
     const width = source.pageWidth, height = source.pageHeight, box = source.box;
     if (typeof width !== "number" || typeof height !== "number" || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0 || !Array.isArray(box) || box.length !== 4 || !box.every((v) => typeof v === "number" && Number.isFinite(v))) {
-      throw new Error("Некорректные координаты источника.");
+      throw new Error("Invalid source coordinates.");
     }
     const [x, y, w, h] = box as number[];
-    if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > width + 0.01 || y + h > height + 0.01) throw new Error("Образец выходит за границы страницы.");
+    if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > width + 0.01 || y + h > height + 0.01) throw new Error("Sample is outside the page bounds.");
     const location = `${source.sha256}:${source.page}:${box.join(",")}`;
-    if (locations.has(location)) throw new Error("Одна и та же область PDF добавлена несколько раз.");
+    if (locations.has(location)) throw new Error("The same PDF crop appears more than once.");
     locations.add(location);
     return { id, latex: text(sample.latex, 80), image: png(sample.image), context: png(sample.context), source: {
       file: text(source.file, 240), sha256: source.sha256, page: Number(source.page), pageWidth: width, pageHeight: height, box: [x, y, w, h],
@@ -102,7 +102,7 @@ export async function datasetFingerprint(dataset: CandidateDataset): Promise<str
 export function decide(review: Review, sample: Candidate, status: Decision["status"], latex: string, now = new Date().toISOString(), issue?: ReviewIssue): Review {
   const label = text(latex, 80);
   if (issue && (status !== "rejected" || !["incorrect-outline", "incorrect-symbol"].includes(issue))) {
-    throw new Error("Образец с ошибкой нельзя принять.");
+    throw new Error("A sample with an issue cannot be accepted.");
   }
   return {
     ...review,
@@ -141,15 +141,15 @@ export function datasetStats(dataset: CandidateDataset, review: Review) {
 
 export function approveDataset(dataset: CandidateDataset, review: Review, now = new Date().toISOString()): Review {
   const stats = datasetStats(dataset, review);
-  if (stats.pending) throw new Error("Сначала проверьте каждый образец.");
-  if (!stats.eligible.length) throw new Error(`Нужен хотя бы один символ с ${MIN_EXAMPLES} принятыми образцами.`);
-  if (review.inspectedRevision !== review.revision) throw new Error("Проверьте итоговую галерею после последнего изменения.");
+  if (stats.pending) throw new Error("Review every sample first.");
+  if (!stats.eligible.length) throw new Error(`At least one symbol needs ${MIN_EXAMPLES} accepted samples.`);
+  if (review.inspectedRevision !== review.revision) throw new Error("Inspect the gallery after the latest change.");
   return { ...review, approvedAt: now };
 }
 
 export function exportDataset(session: ReviewSession) {
   const { dataset, review, fingerprint } = session;
-  if (!review.approvedAt) throw new Error("Датасет ещё не принят.");
+  if (!review.approvedAt) throw new Error("The dataset is not approved yet.");
   approveDataset(dataset, review, review.approvedAt);
   const stats = datasetStats(dataset, review);
   const eligible = new Set(stats.eligible.map((g) => g.latex));

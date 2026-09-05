@@ -82,6 +82,9 @@ services:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
       HANDWRITING_REVIEW_ENABLED: ${HANDWRITING_REVIEW_ENABLED:-0}
+      HANDWRITING_DATA_DIR: /app/data/handwriting/datasets
+    volumes:
+      - ./data/handwriting/datasets:/app/data/handwriting/datasets
     expose:
       - "3000"
     healthcheck:

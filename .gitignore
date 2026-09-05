@@ -17,6 +17,7 @@ coverage/
 
 .playwright-cli/
 output/
+/data/handwriting/
 /aibook-deploy.tar.gz
 
 *.log

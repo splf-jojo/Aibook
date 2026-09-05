@@ -36,9 +36,9 @@ test("extending a pack preserves exact existing decisions but requires a new fin
 
 test("final acceptance requires decisions on every candidate and an explicit final inspection", () => {
   const data = dataset();
-  assert.throws(() => approveDataset(data, freshReview()), /каждый/);
+  assert.throws(() => approveDataset(data, freshReview()), /every sample/);
   let review = acceptAll(data);
-  assert.throws(() => approveDataset(data, review), /галерею/);
+  assert.throws(() => approveDataset(data, review), /gallery/);
   review = approveDataset(data, { ...review, inspectedRevision: review.revision });
   assert.ok(review.approvedAt);
 });
@@ -61,7 +61,7 @@ test("changing or undoing a decision invalidates final acceptance", () => {
   review = decide(review, data.samples[0], "rejected", "x");
   assert.equal(review.approvedAt, null);
   assert.equal(review.inspectedRevision, null);
-  assert.throws(() => exportDataset({ dataset: data, fingerprint: "f", review }), /не принят/);
+  assert.throws(() => exportDataset({ dataset: data, fingerprint: "f", review }), /not approved/);
   const undone = undoDecision(review);
   assert.equal(undone.id, "1");
   assert.equal(undone.review.decisions["1"].status, "accepted");
@@ -73,14 +73,14 @@ test("a corrected label determines coverage and export", () => {
   let review = acceptAll(data);
   review = decide(review, data.samples[0], "accepted", "z");
   assert.equal(datasetStats(data, review).eligible.length, 0);
-  assert.throws(() => approveDataset(data, { ...review, inspectedRevision: review.revision }), /хотя бы один/);
+  assert.throws(() => approveDataset(data, { ...review, inspectedRevision: review.revision }), /At least one/);
 });
 
 test("rejecting every example cannot produce an accepted empty dataset", () => {
   const data = dataset();
   let review = data.samples.reduce((r, s) => decide(r, s, "rejected", s.latex), freshReview());
   review = { ...review, inspectedRevision: review.revision };
-  assert.throws(() => approveDataset(data, review), /хотя бы один/);
+  assert.throws(() => approveDataset(data, review), /At least one/);
 });
 
 test("separate outline and symbol issues persist in the audit, never in accepted samples", () => {
@@ -101,14 +101,14 @@ test("separate outline and symbol issues persist in the audit, never in accepted
   const undo = undoDecision(revised);
   assert.equal(undo.review.decisions["4"].issue, "incorrect-outline");
   assert.equal(undo.review.approvedAt, null);
-  assert.throws(() => decide(review, data.samples[3], "accepted", "y", undefined, "incorrect-outline"), /нельзя принять/);
+  assert.throws(() => decide(review, data.samples[3], "accepted", "y", undefined, "incorrect-outline"), /cannot be accepted/);
 });
 
 test("import rejects duplicate identities, duplicate source crops, remote images, and bad bounds", () => {
   const data = dataset();
   assert.throws(() => parseDataset({ ...data, samples: [data.samples[0], data.samples[0]] }), /ID/);
-  assert.throws(() => parseDataset({ ...data, samples: [sample("1"), sample("2", "x", 20)] }), /область/);
+  assert.throws(() => parseDataset({ ...data, samples: [sample("1"), sample("2", "x", 20)] }), /same PDF crop/);
   assert.throws(() => parseDataset({ ...data, samples: [{ ...sample("1"), image: "https://example.com/private.png" }] }), /PNG/);
-  assert.throws(() => parseDataset({ ...data, samples: [sample("1", "x", 599)] }), /границы/);
+  assert.throws(() => parseDataset({ ...data, samples: [sample("1", "x", 599)] }), /page bounds/);
   assert.throws(() => parseDataset({ ...data, samples: [sample("__proto__", "x", 20)] }), /ID/);
 });
