@@ -9,8 +9,63 @@ import { cleanLatex, glyphAliases } from "../lib/handwriting-writing-renderer.ts
 import { writingDataset } from "../lib/handwriting-writing.server.ts";
 import { approveDataset, datasetFingerprint, decide, exportDataset, freshReview, parseDataset } from "../lib/handwriting-dataset.ts";
 import { applyReviewAction, createDataset, runAnalysis } from "../lib/handwriting-store.server.ts";
+import { applyMathMargins } from "../lib/handwriting-writing-math.ts";
+import { mathjax } from "mathjax-full/js/mathjax.js";
+import { TeX } from "mathjax-full/js/input/tex.js";
+import { SVG } from "mathjax-full/js/output/svg.js";
+import { liteAdaptor } from "mathjax-full/js/adaptors/liteAdaptor.js";
+import { RegisterHTMLHandler } from "mathjax-full/js/handlers/html.js";
 
 const glyph = (latex, width = 48, height = 80) => ({ latex, medoidId: `medoid-${latex}`, image: "data:image/png;base64,", width, height });
+
+test("padding shrinks proportionally inside a fixed cell and clamps thin symbols", () => {
+  const cell = { x: 20, y: 30, width: 40, height: 60 }, item = glyph("x");
+  const padding = { top: 5, right: 3, bottom: 7, left: 9 };
+  const p = placeGlyph(cell, "x", item, 0, { ...defaults, padding });
+  assert.deepEqual(p.cell, cell);
+  assert.deepEqual(p.content, { x: 29, y: 35, width: 28, height: 48 });
+  assert.equal(p.width / p.height, item.width / item.height);
+  const thin = placeGlyph({ ...cell, height: 2 }, "-", glyph("-", 80, 4), 0, { ...defaults, padding });
+  assert.ok(Math.abs(thin.content.height - 1) < 1e-9);
+  assert.ok(thin.padding.top + thin.padding.bottom <= 1);
+  assert.ok(thin.width > 0 && thin.height > 0);
+});
+
+test("text margins change advance, line height and wrapping, while padding does not", () => {
+  const aliases = new Map([["x", glyph("x")]]), input = "xx\nx";
+  const normal = layoutText(input, aliases, defaults, 1000);
+  const margin = { top: 4, right: 7, bottom: 6, left: 3 };
+  const spaced = layoutText(input, aliases, { ...defaults, margin }, 1000);
+  assert.equal(spaced.placements[1].cell.x - normal.placements[1].cell.x, 13);
+  assert.equal(spaced.placements[2].cell.y - normal.placements[2].cell.y, 14);
+  assert.equal(spaced.placements[0].outer.x, 0);
+  const padded = layoutText(input, aliases, { ...defaults, padding: margin }, 1000);
+  assert.deepEqual(padded.placements.map(p => p.cell), normal.placements.map(p => p.cell));
+  const wrapped = layoutText("xx", aliases, { ...defaults, margin }, 40);
+  assert.ok(wrapped.placements[1].cell.y > wrapped.placements[0].cell.y);
+});
+
+test("MathJax reflows margins through fractions and scripts, preserving whole medoids", () => {
+  const adaptor = liteAdaptor(); RegisterHTMLHandler(adaptor);
+  const aliases = glyphAliases(["x", "dx", "dy", "\\sin"].map(s => glyph(s)));
+  const render = (source, margin) => {
+    const tex = new TeX({ packages: ["base", "ams"] });
+    tex.postFilters.add(({ data }) => applyMathMargins(data.root, aliases, { ...defaults, margin }));
+    const doc = mathjax.document("", { InputJax: tex, OutputJax: new SVG({ fontCache: "none" }) });
+    const output = doc.convert(source, { display: true });
+    const svg = adaptor.tags(output, "svg")[0];
+    return { xml: adaptor.outerHTML(output), box: adaptor.getAttribute(svg, "viewBox").split(/\s+/).map(Number),
+      units: adaptor.tags(output, "g").filter(g => adaptor.hasAttribute(g, "data-writing-unit")) };
+  };
+  const source = String.raw`\frac{dx}{dy}=x_1^2+\sin x`;
+  const normal = render(source, defaults.margin), spaced = render(source, { top: 4, right: 6, bottom: 4, left: 6 });
+  assert.equal(normal.units.length, 0);
+  assert.equal(spaced.units.length, 9); // dx and dy each occupy one unit.
+  assert.ok(spaced.box[2] > normal.box[2]); assert.ok(spaced.box[3] > normal.box[3]);
+  assert.ok(!spaced.xml.includes('data-mml-node="merror"'));
+  assert.equal(render("123", { top: 0, right: 3, bottom: 0, left: 3 }).units.length, 3);
+  assert.equal(render(source, { top: 0, right: 0, bottom: 0, left: 0 }).xml, normal.xml);
+});
 
 test("LaTeX aliases support functions, differential pairs, operators and distinct alphabets", () => {
   const aliases = glyphAliases(["x", "dx", "\\sin", "\\cos", "-", "\\int", "\\partial", "\\mathbb{R}"].map(s => glyph(s)));

@@ -7,6 +7,7 @@ import { listDatasets, loadWritingDataset, type DatasetSummary } from "@/lib/han
 import { DEFAULT_WRITING_SETTINGS, MAX_WRITING_LENGTH, type WritingDataset, type WritingResult } from "@/lib/handwriting-writing";
 import { analysisLabels } from "@/lib/handwriting-analysis";
 import { Latex } from "./handwriting-review";
+import { BoxInspector, InsetControls, SymbolBoxes } from "./handwriting-writing-boxes";
 import shared from "./handwriting-review.module.css";
 import styles from "./handwriting-writing.module.css";
 
@@ -29,6 +30,7 @@ export function HandwritingWriting() {
   const [mode, setMode] = useState<"text" | "latex">("latex");
   const [source, setSource] = useState("\\frac{dx}{dy}=x^2+\\sin x");
   const [settings, setSettings] = useState(DEFAULT_WRITING_SETTINGS);
+  const [showBoxes, setShowBoxes] = useState(false), [selectedBox, setSelectedBox] = useState<number | null>(null);
   const [result, setResult] = useState<WritingResult | null>(null), [rendering, setRendering] = useState(false), [exporting, setExporting] = useState(false);
   const [width, setWidth] = useState(800), surface = useRef<HTMLDivElement>(null), active = useRef(false), catalogRequest = useRef(0);
   const refresh = useCallback(async () => {
@@ -62,6 +64,7 @@ export function HandwritingWriting() {
   }, []);
   useEffect(() => {
     let cancelled = false; setRenderError("");
+    setSelectedBox(null);
     if (!source.trim()) { setResult(null); setRendering(false); return; }
     setRendering(true);
     const timer = window.setTimeout(async () => {
@@ -115,10 +118,14 @@ export function HandwritingWriting() {
           <button className={shared.iconButton} aria-label="Reshuffle variation" title="Reshuffle variation" disabled={!settings.variation} onClick={() => setSettings((s) => ({ ...s, seed: s.seed + 1 }))}><Shuffle size={17} /></button>
         </div>
       </div>
-      {mode === "text" && <details className={styles.spacing}><summary>Spacing</summary><div>
+      <details className={styles.spacing}><summary>Spacing</summary><div>
+        <InsetControls label="Padding" value={settings.padding} onChange={(padding) => setSettings((s) => ({ ...s, padding }))} />
+        <InsetControls label="Margin" value={settings.margin} onChange={(margin) => setSettings((s) => ({ ...s, margin }))} />
+        {mode === "text" && <>
         <label className={styles.slider}><span>Letter spacing <output>{settings.letterSpacing} px</output></span><input aria-label="Letter spacing" type="range" min={0} max={16} value={settings.letterSpacing} onChange={(e) => setSettings((s) => ({ ...s, letterSpacing: Number(e.target.value) }))} /></label>
         <label className={styles.slider}><span>Line spacing <output>{settings.lineSpacing.toFixed(1)}</output></span><input aria-label="Line spacing" type="range" min={1.2} max={2.8} step={0.1} value={settings.lineSpacing} onChange={(e) => setSettings((s) => ({ ...s, lineSpacing: Number(e.target.value) }))} /></label>
-      </div></details>}
+        </>}
+      </div><button className={shared.secondaryButton} onClick={() => setSettings((s) => ({ ...s, padding: DEFAULT_WRITING_SETTINGS.padding, margin: DEFAULT_WRITING_SETTINGS.margin, letterSpacing: DEFAULT_WRITING_SETTINGS.letterSpacing, lineSpacing: DEFAULT_WRITING_SETTINGS.lineSpacing }))}>Reset spacing</button></details>
       {data && data.glyphs.length > 0 && <div className={styles.coverage} aria-label="Available symbols">{data.glyphs.map((glyph) => <span key={glyph.latex} title={glyph.latex}>
         <Latex value={glyph.latex} />
         <img className={styles.medoid} src={glyph.image} width={glyph.width} height={glyph.height} alt={`${glyph.latex} medoid`} />
@@ -133,11 +140,15 @@ export function HandwritingWriting() {
         <div className={styles.paper} aria-busy={rendering}>{result?.preview && <img src={imageSource(result.preview.svg)} width={result.preview.width} height={result.preview.height} alt="LaTeX preview" />}</div>
       </section>}
       <section className={styles.preview} aria-label="Handwriting result">
-        <div className={styles.outputHeading}><h2>Handwriting</h2><div>
+        <div className={styles.outputHeading}><div><h2>Handwriting</h2><label className={styles.boxToggle}><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />Boxes</label></div><div>
           {(rendering || (datasetId && !data && !error)) && <LoaderCircle className={shared.spinner} size={17} role="status" aria-label="Rendering" />}
           <button className={shared.iconButton} aria-label="Download PNG" title="Download PNG" onClick={() => void download()} disabled={!result || !data?.glyphs.length || rendering || exporting}><Download size={18} /></button>
         </div></div>
-        <div className={styles.paper} aria-busy={rendering}>{result && !!data?.glyphs.length && <img src={imageSource(result.svg)} width={result.width} height={result.height} alt="Handwriting result" />}</div>
+        <div className={styles.paper} aria-busy={rendering}>{result && !!data?.glyphs.length && <div className={styles.resultCanvas} style={{ width: result.width, height: result.height }}>
+          <img src={imageSource(result.svg)} width={result.width} height={result.height} alt="Handwriting result" />
+          {showBoxes && !rendering && <SymbolBoxes result={result} selected={selectedBox} onSelect={setSelectedBox} />}
+        </div>}</div>
+        {showBoxes && result && !!data?.glyphs.length && !rendering && <BoxInspector placement={selectedBox === null ? undefined : result.placements[selectedBox]} />}
       </section>
     </div>
   </main>;

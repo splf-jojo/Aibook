@@ -196,6 +196,26 @@ repeatable. At zero variation the seed has no effect; **Reshuffle variation**
 changes the seed. **Download PNG** exports the displayed result, including visible
 missing-symbol markers. Input/settings stay in the current page session.
 
+**Spacing** contains global **Padding** and **Margin** (0–24 px at the base font
+size), with individual top/right/bottom/left controls and **Reset spacing**.
+Padding reduces the interior of the existing symbol cell without distorting
+the medoid or moving neighboring cells. Insets are proportionally limited per
+axis to retain a drawable interior for thin operators and small scripts. The
+inspector reports the effective values. Margin expands the space allocated to
+each symbol: Text recomputes advances, wrapping and line heights; LaTeX uses
+MathML `mpadded` before MathJax layout, so fractions, scripts and tables reflow.
+Compound medoids such as `dx` remain one unit; numbers use one unit per digit.
+Math spacing scales with the local font size in scripts. Zero insets preserve
+the original layout, and the ordinary LaTeX preview is unchanged by these settings.
+Generated structures, including the radical sign and fraction/root rules, keep
+MathJax's structural spacing; the radical inspector reports zero added margin.
+
+**Boxes**, beside **Handwriting**, overlays glyph bounds, cells, padding and
+margins. Click a box (or focus it and press Enter/Space) to inspect its dimensions,
+position, rotation and applied insets. Variation can move ink outside the cell;
+the canvas includes the transformed bounds. The overlay is separate from the
+rendered SVG, so toggling it changes neither the handwriting nor the PNG export.
+
 Limits: 2,000 input characters, 600 MathJax paths/text elements, bounded formula
 and image dimensions. Runtime code is in `handwriting-writing*.ts`; the existing
 canvas formula renderer is separate. SVG conversion uses the installed
