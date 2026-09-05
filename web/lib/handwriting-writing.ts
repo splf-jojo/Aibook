@@ -8,8 +8,8 @@ export type WritingDataset = {
 export type Insets = { top: number; right: number; bottom: number; left: number };
 export const ZERO_INSETS: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
 export const MAX_SYMBOL_SPACING = 24;
-export type WritingSettings = { size: number; variation: number; letterSpacing: number; lineSpacing: number; seed: number; padding: Insets; margin: Insets };
-export const DEFAULT_WRITING_SETTINGS: WritingSettings = { size: 48, variation: 0, letterSpacing: 3, lineSpacing: 1.7, seed: 1, padding: ZERO_INSETS, margin: ZERO_INSETS };
+export type WritingSettings = { size: number; variation: number; verticalScatter: number; letterSpacing: number; lineSpacing: number; seed: number; padding: Insets; margin: Insets };
+export const DEFAULT_WRITING_SETTINGS: WritingSettings = { size: 48, variation: 0, verticalScatter: 0, letterSpacing: 3, lineSpacing: 1.7, seed: 1, padding: ZERO_INSETS, margin: ZERO_INSETS };
 export const MAX_WRITING_LENGTH = 2000;
 export type Box = { x: number; y: number; width: number; height: number };
 export type WritingPlacement = Box & { label: string; glyph?: WritingGlyph; angle: number; cell: Box; content: Box; outer: Box; padding: Insets; margin: Insets };
@@ -52,10 +52,18 @@ export function randomVariation(index: number, settings: WritingSettings) {
   const random = () => { state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return (state >>> 0) / 4294967296 * 2 - 1; };
   const amount = Math.max(0, Math.min(100, settings.variation)) / 100;
   if (!amount) return { dx: 0, dy: 0, angle: 0, scale: 1 };
-  return { dx: random() * amount * 0.035, dy: random() * amount * 0.055, angle: random() * amount * 5, scale: 1 + random() * amount * 0.06 };
+  return { dx: random() * amount * 0.035, dy: 0, angle: random() * amount * 5, scale: 1 + random() * amount * 0.06 };
 }
 
-export function placeGlyph(cell: Box, label: string, glyph: WritingGlyph | undefined, index: number, settings: WritingSettings, fontScale = 1): WritingPlacement {
+export function verticalScatter(index: number, settings: WritingSettings): number {
+  const amount = Number.isFinite(settings.verticalScatter) ? Math.max(0, Math.min(30, settings.verticalScatter)) : 0;
+  if (!amount) return 0;
+  let value = (settings.seed ^ Math.imul(index + 1, 0x45d9f3b)) >>> 0;
+  value ^= value >>> 16; value = Math.imul(value, 0x45d9f3b); value ^= value >>> 16;
+  return ((value >>> 0) / 4294967295 * 2 - 1) * amount;
+}
+
+export function placeGlyph(cell: Box, label: string, glyph: WritingGlyph | undefined, index: number, settings: WritingSettings, fontScale = 1, reference: Box = cell, alignBottom = false): WritingPlacement {
   const requested = scaleInsets(settings.padding, fontScale), margin = scaleInsets(settings.margin, fontScale);
   // Keep a drawable interior even for thin operators or small scripts. Record
   // the effective insets, not the larger requested values, in the inspector.
@@ -64,9 +72,12 @@ export function placeGlyph(cell: Box, label: string, glyph: WritingGlyph | undef
   const padding = { top: requested.top * sy, right: requested.right * sx, bottom: requested.bottom * sy, left: requested.left * sx };
   const box = { x: cell.x + padding.left, y: cell.y + padding.top, width: cell.width - padding.left - padding.right, height: cell.height - padding.top - padding.bottom };
   const ratio = glyph ? glyph.width / glyph.height : box.width / box.height;
-  const height = Math.min(box.height, box.width / ratio), width = height * ratio;
+  const height = Math.min(box.height, reference.height, Math.min(box.width, reference.width) / ratio), width = height * ratio;
   const variation = randomVariation(index, settings), h = height * variation.scale, w = width * variation.scale;
-  return { x: box.x + (box.width - w) / 2 + box.height * variation.dx, y: box.y + (box.height - h) / 2 + box.height * variation.dy,
+  const clamp = (value: number, start: number, length: number, glyphLength: number) => Math.max(start, Math.min(start + length - glyphLength, value));
+  const x = clamp(reference.x + (reference.width - w) / 2, box.x, box.width, w);
+  const y = clamp(alignBottom ? reference.y + reference.height - h : reference.y + (reference.height - h) / 2, box.y, box.height, h);
+  return { x: x + box.height * variation.dx, y,
     width: w, height: h, angle: variation.angle, label, cell, content: box, outer: expandBox(cell, margin), padding, margin, ...(glyph ? { glyph } : {}) };
 }
 
@@ -96,7 +107,9 @@ export function layoutText(input: string, aliases: ReadonlyMap<string, WritingGl
     if (x && x + advance > availableWidth) { x = 0; line++; }
     const baseline = line * lineHeight + size + margin.top;
     const y = operator ? baseline - size * 0.3 - height / 2 : baseline - height + (descender ? size * 0.2 : 0);
-    placements.push(placeGlyph({ x: x + margin.left, y, width, height }, t, token.glyph, placements.length, settings));
+    const offset = verticalScatter(placements.length, settings);
+    placements.push(placeGlyph({ x: x + margin.left, y: baseline - size * 0.8 + offset, width, height: size }, t, token.glyph, placements.length, settings, 1,
+      { x: x + margin.left, y: y + offset, width, height }, !operator));
     if (!token.glyph) missing.add(t);
     x += advance + settings.letterSpacing; maxX = Math.max(maxX, x);
   }

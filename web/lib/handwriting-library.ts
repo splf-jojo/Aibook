@@ -31,6 +31,7 @@ export type AnalysisPreview = {
 
 async function response<T>(result: Response): Promise<T> {
   const body = await result.json().catch(() => null);
+  if (typeof window !== "undefined" && (result.status === 401 || result.status === 403)) window.dispatchEvent(new Event("dev-session-expired"));
   if (!result.ok) throw new Error(body?.error ?? "Request failed. Try again.");
   return body as T;
 }

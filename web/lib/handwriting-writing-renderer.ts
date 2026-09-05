@@ -7,7 +7,7 @@ import type { AbstractMmlNode, AbstractMmlTokenNode, MmlNode } from "mathjax-ful
 import "mathjax-full/js/input/tex/ams/AmsConfiguration.js";
 import { applyMathMargins } from "./handwriting-writing-math.ts";
 import {
-  glyphBounds, invisibleMath, layoutText, MAX_WRITING_LENGTH, missingLabel, normalizeMathCharacter, placeGlyph, ZERO_INSETS,
+  glyphBounds, invisibleMath, layoutText, MAX_WRITING_LENGTH, missingLabel, normalizeMathCharacter, placeGlyph, verticalScatter, ZERO_INSETS,
   type Box, type WritingGlyph, type WritingPlacement, type WritingResult, type WritingSettings,
 } from "./handwriting-writing.ts";
 
@@ -84,9 +84,9 @@ function textOf(element: Element) {
     ? normalizeMathCharacter(String.fromCodePoint(parseInt(item.getAttribute("data-c")!, 16))) : item.textContent ?? "").join("").replace(invisibleMath, "");
 }
 
-function finish(placements: WritingPlacement[], width: number, height: number, size: number, structures = "") {
+function finish(placements: WritingPlacement[], width: number, height: number, size: number, structures = "", structureBounds: Box[] = []) {
   const padding = size * 0.35;
-  const boxes = placements.flatMap((p) => [p.outer, glyphBounds(p, p.angle)]);
+  const boxes = [...structureBounds, ...placements.flatMap((p) => [p.outer, glyphBounds(p, p.angle)])];
   const left = Math.min(0, ...boxes.map((b) => b.x)), top = Math.min(0, ...boxes.map((b) => b.y));
   const right = Math.max(width, ...boxes.map((b) => b.x + b.width)), bottom = Math.max(height, ...boxes.map((b) => b.y + b.height));
   const origin = { x: padding - left, y: padding - top };
@@ -114,7 +114,7 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
   };
   sizeSvg(original);
   const preview = { svg: original.svg.outerHTML, width: original.viewBox[2] * scale, height: original.viewBox[3] * scale };
-  const layout = Object.values(settings.margin).some(Boolean) ? svgDocument(input, { aliases, settings }) : original;
+  const layout = svgDocument(input, { aliases, settings });
   sizeSvg(layout);
   const { svg, viewBox: [vx, vy, vw, vh] } = layout;
   const host = document.createElement("div");
@@ -122,6 +122,14 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
   host.setAttribute("aria-hidden", "true"); host.append(svg); document.body.append(host);
   try {
     const matrix = (element: SVGGraphicsElement) => svg.getScreenCTM()!.inverse().multiply(element.getScreenCTM()!);
+    for (const group of svg.querySelectorAll<SVGGraphicsElement>("[data-writing-scatter]")) {
+      const dy = verticalScatter(Number(group.getAttribute("data-writing-scatter")), settings);
+      if (!dy) continue;
+      const inverse = matrix(group).inverse();
+      // Use a vector, not a point: translations must not affect the delta.
+      const dx = inverse.c * dy / scale, localY = inverse.d * dy / scale;
+      group.setAttribute("transform", `${group.getAttribute("transform") ?? ""} translate(${dx} ${localY})`);
+    }
     const bounds = (element: SVGGraphicsElement): Box => {
       const b = element.getBBox(), m = matrix(element);
       const points = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]]
@@ -137,8 +145,13 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
       const fontScale = Math.hypot(matrix(element).a, matrix(element).b);
       // MathJax creates the radical itself during output, outside the input
       // token tree. Its structural spacing is not an applied token margin.
-      const applied = layout === original || element.closest("[data-writing-unit]") ? settings : { ...settings, margin: ZERO_INSETS };
-      placements.push(placeGlyph(box, label, glyph, placements.length, applied, fontScale));
+      const applied = element.closest("[data-writing-unit]") ? settings : { ...settings, margin: ZERO_INSETS };
+      const line = element.getAttribute("data-writing-cell") === "line";
+      const em = settings.size * fontScale, baseline = (matrix(element).f - vy) * scale;
+      const cell = line ? { ...box, y: baseline - em * 0.8, height: em } : box;
+      const operator = /^[+−=±×÷·<>≤≥≠-]$/.test(label);
+      const reference = line && !operator && box.y + box.height < baseline + em * 0.08 ? { ...box, y: baseline - box.height } : box;
+      placements.push(placeGlyph(cell, label, glyph, placements.length, applied, fontScale, reference, line && !operator));
       if (!glyph) missing.add(missingLabel(label));
     };
     for (let i = 0; i < atoms.length; i++) {
@@ -169,7 +182,8 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
       }
       consumed.add(atom);
     }
-    const structures = [...svg.querySelectorAll<SVGGraphicsElement>("rect, line, path:not([data-c])")].filter(visible).filter((element) => !atoms.some((atom) => atom.contains(element))).map((element) => {
+    const structureElements = [...svg.querySelectorAll<SVGGraphicsElement>("rect, line, path:not([data-c])")].filter(visible).filter((element) => !atoms.some((atom) => atom.contains(element)));
+    const structures = structureElements.map((element) => {
       const m = matrix(element), clone = element.cloneNode(true) as SVGGraphicsElement;
       clone.removeAttribute("transform"); clone.setAttribute("fill", "#252822");
       if (element.tagName.toLowerCase() === "line") { clone.setAttribute("stroke", "#252822"); clone.setAttribute("stroke-width", "35"); }
@@ -178,7 +192,7 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
     for (const path of svg.querySelectorAll("path[data-c], text")) {
       if (visible(path) && !atoms.some((atom) => atom.contains(path))) unsupported.add(path.closest("[data-mml-node]")?.getAttribute("data-mml-node") ?? "symbol layout");
     }
-    return { ...finish(placements, vw * scale, vh * scale, settings.size, structures), placements, missing: [...missing], unsupported: [...unsupported], preview };
+    return { ...finish(placements, vw * scale, vh * scale, settings.size, structures, structureElements.map(bounds)), placements, missing: [...missing], unsupported: [...unsupported], preview };
   } finally { host.remove(); }
 }
 

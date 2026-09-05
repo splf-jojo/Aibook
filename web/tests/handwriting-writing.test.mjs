@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_WRITING_SETTINGS as defaults, layoutText, placeGlyph, randomVariation, textTokens } from "../lib/handwriting-writing.ts";
+import { DEFAULT_WRITING_SETTINGS as defaults, layoutText, placeGlyph, randomVariation, textTokens, verticalScatter } from "../lib/handwriting-writing.ts";
 import { cleanLatex, glyphAliases } from "../lib/handwriting-writing-renderer.ts";
 import { writingDataset } from "../lib/handwriting-writing.server.ts";
 import { approveDataset, datasetFingerprint, decide, exportDataset, freshReview, parseDataset } from "../lib/handwriting-dataset.ts";
@@ -55,12 +55,15 @@ test("MathJax reflows margins through fractions and scripts, preserving whole me
     const output = doc.convert(source, { display: true });
     const svg = adaptor.tags(output, "svg")[0];
     return { xml: adaptor.outerHTML(output), box: adaptor.getAttribute(svg, "viewBox").split(/\s+/).map(Number),
-      units: adaptor.tags(output, "g").filter(g => adaptor.hasAttribute(g, "data-writing-unit")) };
+      units: adaptor.tags(output, "g").filter(g => adaptor.hasAttribute(g, "data-writing-unit")),
+      scatter: adaptor.tags(output, "g").filter(g => adaptor.hasAttribute(g, "data-writing-scatter")) };
   };
   const source = String.raw`\frac{dx}{dy}=x_1^2+\sin x`;
   const normal = render(source, defaults.margin), spaced = render(source, { top: 4, right: 6, bottom: 4, left: 6 });
-  assert.equal(normal.units.length, 0);
+  assert.equal(normal.units.length, 9);
   assert.equal(spaced.units.length, 9); // dx and dy each occupy one unit.
+  assert.equal(normal.scatter.length, 6); // Whole fraction, =, x with scripts, +, sin, x.
+  assert.ok(normal.units.every(unit => adaptor.getAttribute(unit, "data-writing-cell") === "line"));
   assert.ok(spaced.box[2] > normal.box[2]); assert.ok(spaced.box[3] > normal.box[3]);
   assert.ok(!spaced.xml.includes('data-mml-node="merror"'));
   assert.equal(render("123", { top: 0, right: 3, bottom: 0, left: 3 }).units.length, 3);
@@ -102,6 +105,28 @@ test("variation is reproducible, zero is stable, and medoid proportions are neve
   const placed = placeGlyph(box, "x", item, 2, varied);
   assert.ok(Math.abs(placed.width / placed.height - item.width / item.height) < 1e-10);
   assert.equal(placed.glyph.medoidId, item.medoidId);
+  assert.equal(randomVariation(2, varied).dy, 0);
+});
+
+test("baseline cells align and vertical scatter is independent, reproducible and bounded to 30 px", () => {
+  const aliases = new Map(["x", "y", "sin", "+"].map(s => [s, glyph(s)]));
+  const normal = layoutText("x+sin y", aliases, defaults, 1000);
+  assert.ok(normal.placements.every(p => p.cell.y === normal.placements[0].cell.y && p.cell.height === defaults.size));
+  const settings = { ...defaults, verticalScatter: 30 };
+  const scattered = layoutText("x+sin y", aliases, settings, 1000);
+  const varied = layoutText("x+sin y", aliases, { ...settings, variation: 100 }, 1000);
+  assert.deepEqual(scattered.placements.map(p => p.cell), varied.placements.map(p => p.cell));
+  scattered.placements.forEach((p, i) => {
+    assert.ok(Math.abs(p.cell.y - normal.placements[i].cell.y) <= 30);
+    assert.equal(p.cell.x, normal.placements[i].cell.x);
+    assert.ok(Math.abs(p.cell.y - normal.placements[i].cell.y - verticalScatter(i, settings)) < 1e-10);
+  });
+  for (let i = 0; i < 100; i++) {
+    assert.equal(verticalScatter(i, { ...defaults, seed: i }), 0);
+    assert.equal(verticalScatter(i, settings), verticalScatter(i, settings));
+    assert.ok(Math.abs(verticalScatter(i, { ...settings, verticalScatter: 100 })) <= 30);
+  }
+  assert.notEqual(verticalScatter(0, settings), verticalScatter(0, { ...settings, seed: 2 }));
 });
 
 test("writing serves transparent accepted medoids, never edits reviews, and drops stale or unapproved results", async () => {

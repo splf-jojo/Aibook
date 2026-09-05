@@ -4,11 +4,11 @@ import { failure, json, readJson } from "@/lib/handwriting-http.server";
 
 export const runtime = "nodejs";
 export async function GET(request: Request) {
-  const denied = checkDevRequest(request); if (denied) return denied;
+  const denied = await checkDevRequest(request); if (denied) return denied;
   try { return json(await catalog()); } catch (error) { return failure(error); }
 }
 export async function POST(request: Request) {
-  const denied = checkDevRequest(request); if (denied) return denied;
+  const denied = await checkDevRequest(request); if (denied) return denied;
   try {
     const body = await readJson(request) as { dataset?: unknown };
     if (!body || !body.dataset) throw new LibraryError("Choose a candidate dataset.");

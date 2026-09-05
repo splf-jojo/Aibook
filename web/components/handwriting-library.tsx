@@ -13,7 +13,6 @@ import library from "./handwriting-library.module.css";
 export function DevNavigation() {
   return <header className={styles.topbar}>
     <Link href="/dev" className={styles.brand}><ArrowLeft size={17} />Dev</Link>
-    <div className={styles.tools}><Link href="/dev/writing" className={styles.secondaryButton}>Writing</Link></div>
   </header>;
 }
 

@@ -22,8 +22,19 @@ docker compose --env-file .env.production -f docker-compose.production.yml up -d
 ```
 
 Open `http://localhost/dev`. The flag defaults to `0` in production. Pages and
-JSON routes additionally require a localhost/loopback Host; mutations require
-same-origin JSON requests. This is a local developer tool, not a public,
+dataset JSON routes require a localhost/loopback Host and an authenticated
+AIbook account whose username is exactly `dev`. Create that account in the local
+backend before use; no default password is stored in the source. The Dev sign-in
+form uses the existing backend authentication. An existing AIbook browser login
+as `dev` can establish the Dev session automatically. Other accounts are denied.
+
+The session cookie is HttpOnly, SameSite Strict, scoped to `/dev`, and expires
+after eight hours or when the backend JWT expires, whichever comes first. Every
+dataset request revalidates its identity against `/api/auth/me`; a username in
+browser storage cannot grant access. **Sign out** is on `/dev`. Compose configures
+`INTERNAL_API_URL=http://api:8000`; outside Docker it defaults to
+`http://127.0.0.1:8000`. Mutations require same-origin JSON requests.
+This is a local developer tool, not a public,
 multi-user service. Do not expose its storage or enable it on a public proxy.
 
 Compose mounts `./data/handwriting/datasets` into the web container at
@@ -94,6 +105,9 @@ These Next.js routes are under `/dev`, separate from the FastAPI `/api` prefix:
 
 | Method | Route | Purpose |
 | --- | --- | --- |
+| POST | `/dev/session` | Sign in with `{ username, password }` or validate an existing `{ token }` |
+| GET | `/dev/session` | Verify the current Dev session |
+| DELETE | `/dev/session` | Clear the Dev session cookie |
 | GET | `/dev/datasets` | Catalog summaries, without embedded images |
 | POST | `/dev/datasets` | Import `{ dataset: candidatePack }` |
 | GET | `/dev/datasets/[id]` | Dataset and current review |
@@ -165,7 +179,9 @@ PNG decoding and resizing use [Sharp](https://sharp.pixelplumbing.com/api-resize
 ## Writing
 
 Select an analyzed dataset, enter **Text** or **LaTeX**, and adjust **Size** and
-**Variation**. The available symbols are shown below the dataset selector, each
+**Variation**. On desktop, input, available symbols and previews occupy the left
+column; dataset and rendering settings occupy the right. On narrow screens,
+settings stack above the workspace. The available symbols appear below the input, each
 with its actual medoid underneath. **Examples** inserts one of seven LaTeX presets
 (fractions, powers, trigonometry, derivative, integral, sum and multiple lines).
 Presets use the same missing-symbol checks as manually entered formulas.
@@ -190,10 +206,20 @@ It does not modify images on disk, review decisions or approval. Unapproved,
 outdated or uncomputed analyses return no glyphs; the page links to review or
 analysis. Returning to the browser tab refreshes dataset availability.
 
-Variation applies bounded changes of position, rotation (up to 5 degrees) and
-uniform scale (up to 6%); it does not synthesize strokes. A fixed seed makes it
-repeatable. At zero variation the seed has no effect; **Reshuffle variation**
-changes the seed. **Download PNG** exports the displayed result, including visible
+Ordinary symbols use a common line cell (0.8 em ascent, 0.2 em descent), with
+letters aligned to a baseline and operators centered on the math axis. Superscripts,
+subscripts, fractions and large/stretching operators retain their mathematical
+placement. Medoids still preserve their proportions and fit within their cells.
+
+**Vertical scatter** independently translates baseline items by up to ±30 px.
+At zero, cells on the same baseline are aligned. A base with its scripts, a whole
+fraction or root moves as one item, so its internal structure remains intact.
+Text compound medoids move as one item too. Scatter is measured in output pixels,
+independent of font size. **Variation** applies horizontal jitter, rotation (up to
+5 degrees) and uniform scale (up to 6%), without changing the cell baseline or
+synthesizing strokes. A fixed seed makes both controls repeatable. With both at
+zero the seed has no effect; **Reshuffle variation** changes the shared seed.
+**Download PNG** exports the displayed result, including visible
 missing-symbol markers. Input/settings stay in the current page session.
 
 **Spacing** contains global **Padding** and **Margin** (0–24 px at the base font
@@ -205,8 +231,8 @@ inspector reports the effective values. Margin expands the space allocated to
 each symbol: Text recomputes advances, wrapping and line heights; LaTeX uses
 MathML `mpadded` before MathJax layout, so fractions, scripts and tables reflow.
 Compound medoids such as `dx` remain one unit; numbers use one unit per digit.
-Math spacing scales with the local font size in scripts. Zero insets preserve
-the original layout, and the ordinary LaTeX preview is unchanged by these settings.
+Math spacing scales with the local font size in scripts. Zero insets leave the
+line cells unchanged; the ordinary LaTeX preview is unaffected by these settings.
 Generated structures, including the radical sign and fraction/root rules, keep
 MathJax's structural spacing; the radical inspector reports zero added margin.
 
@@ -261,6 +287,7 @@ python scripts/handwriting/build_candidates.py --notes C:\path\to\notes --manife
 Set-Location web
 node tests/handwriting-dataset.test.mjs
 node tests/handwriting-library.test.mjs
+node tests/handwriting-access.test.mjs
 node tests/handwriting-analysis.test.mjs
 node tests/handwriting-writing.test.mjs
 npm run typecheck

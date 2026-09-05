@@ -1,0 +1,6 @@
+.login { width: min(360px, calc(100% - 40px)); margin: 10vh auto; display: grid; gap: 20px; }
+.login h1 { font-size: 24px; font-weight: 500; margin: 0 0 8px; }
+.login label { display: grid; gap: 8px; font-size: 13px; color: var(--muted); }
+.login input { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--ink); }
+.login input[readonly] { background: #f3f4ef; }
+.error { color: #9a4636; font-size: 13px; margin: 0; }

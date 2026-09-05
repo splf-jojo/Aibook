@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { approveDataset, datasetFingerprint, decide, exportDataset, freshReview, parseDataset } from "../lib/handwriting-dataset.ts";
 import { analysisPreview, applyReviewAction, catalog, createDataset, readDataset } from "../lib/handwriting-store.server.ts";
-import { checkDevRequest } from "../lib/handwriting-access.server.ts";
+import { checkDevTransport } from "../lib/handwriting-access.server.ts";
 import { readJson } from "../lib/handwriting-http.server.ts";
 
 const image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1cAAAAASUVORK5CYII=";
@@ -108,12 +108,12 @@ test("dev access is disabled by default, local only, and rejects cross-origin wr
     process.env.NODE_ENV = "production"; process.env.HANDWRITING_REVIEW_ENABLED = "0";
     const request = (host, method = "GET", origin) => new Request("http://localhost/dev/datasets", { method,
       headers: { host, "content-type": "application/json", ...(origin ? { origin } : {}) } });
-    assert.equal(checkDevRequest(request("localhost")).status, 404);
+    assert.equal(checkDevTransport(request("localhost")).status, 404);
     process.env.HANDWRITING_REVIEW_ENABLED = "1";
-    assert.equal(checkDevRequest(request("example.com")).status, 404);
-    assert.equal(checkDevRequest(request("localhost")), null);
-    assert.equal(checkDevRequest(request("localhost", "POST", "https://example.com")).status, 403);
-    assert.equal(checkDevRequest(request("localhost", "POST", "http://localhost")), null);
+    assert.equal(checkDevTransport(request("example.com")).status, 404);
+    assert.equal(checkDevTransport(request("localhost")), null);
+    assert.equal(checkDevTransport(request("localhost", "POST", "https://example.com")).status, 403);
+    assert.equal(checkDevTransport(request("localhost", "POST", "http://localhost")), null);
   } finally {
     if (enabled === undefined) delete process.env.HANDWRITING_REVIEW_ENABLED; else process.env.HANDWRITING_REVIEW_ENABLED = enabled;
     if (nodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = nodeEnv;

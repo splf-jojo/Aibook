@@ -90,66 +90,70 @@ export function HandwritingWriting() {
   return <main className={shared.app} lang="en">
     <header className={shared.topbar}>
       <Link href="/dev" className={shared.brand}><ArrowLeft size={17} />Dev</Link>
-      <div className={shared.tools}><Link href="/dev/dataset" className={shared.secondaryButton}>Datasets</Link></div>
     </header>
-    <div className={styles.content} ref={surface}>
-      <div className={shared.libraryHeading}><h1>Writing</h1>
-        <div className={shared.alignmentSwitch} role="group" aria-label="Input mode">
-          <button aria-pressed={mode === "text"} onClick={() => setMode("text")}>Text</button>
-          <button aria-pressed={mode === "latex"} onClick={() => setMode("latex")}>LaTeX</button>
+    <div className={styles.content}>
+      <div className={styles.workspace} ref={surface}>
+        <div className={shared.libraryHeading}><h1>Writing</h1>
+          <div className={shared.alignmentSwitch} role="group" aria-label="Input mode">
+            <button aria-pressed={mode === "text"} onClick={() => setMode("text")}>Text</button>
+            <button aria-pressed={mode === "latex"} onClick={() => setMode("latex")}>LaTeX</button>
+          </div>
         </div>
+        <textarea className={styles.input} aria-label={mode === "latex" ? "LaTeX input" : "Text input"} value={source}
+          maxLength={MAX_WRITING_LENGTH} rows={3} spellCheck={false} onChange={(event) => setSource(event.target.value)} />
+        {mode === "latex" && <select className={styles.presets} aria-label="LaTeX presets" value="" onChange={(event) => {
+          const preset = latexPresets.find((item) => item.name === event.target.value);
+          if (preset) setSource(preset.value);
+        }}>
+          <option value="" disabled>Examples</option>
+          {latexPresets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name}</option>)}
+        </select>}
+        {data && data.glyphs.length > 0 && <div className={styles.coverage} aria-label="Available symbols">{data.glyphs.map((glyph) => <span key={glyph.latex} title={glyph.latex}>
+          <Latex value={glyph.latex} />
+          <img className={styles.medoid} src={glyph.image} width={glyph.width} height={glyph.height} alt={`${glyph.latex} medoid`} />
+        </span>)}</div>}
+        {error && <div role="alert" className={shared.error}>{error}<button className={shared.secondaryButton} onClick={() => void refresh()}>Retry</button></div>}
+        {unavailable && <div className={styles.notice}><span>{data.approved ? `${analysisLabels[data.status]}.` : "Dataset needs approval."}</span>
+          <Link href={`/dev/dataset/${data.approved ? "analysis" : "labeling"}/${data.id}`} className={shared.secondaryButton}>{data.approved ? "Analysis" : "Review dataset"}</Link></div>}
+        {renderError && <div role="alert" className={shared.error}>{renderError}</div>}
+        {!!data?.glyphs.length && !!result?.missing.length && <div className={styles.missing} role="status"><span>Missing symbols</span><div>{result.missing.map((label) => <code key={label}>{label}</code>)}</div></div>}
+        {!!result?.unsupported.length && <div className={shared.error} role="status">Unsupported layout: {result.unsupported.join(", ")}</div>}
+        {mode === "latex" && <section className={styles.preview} aria-label="LaTeX preview"><h2>LaTeX</h2>
+          <div className={styles.paper} aria-busy={rendering}>{result?.preview && <img src={imageSource(result.preview.svg)} width={result.preview.width} height={result.preview.height} alt="LaTeX preview" />}</div>
+        </section>}
+        <section className={styles.preview} aria-label="Handwriting result">
+          <div className={styles.outputHeading}><div><h2>Handwriting</h2><label className={styles.boxToggle}><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />Boxes</label></div><div>
+            {(rendering || (datasetId && !data && !error)) && <LoaderCircle className={shared.spinner} size={17} role="status" aria-label="Rendering" />}
+            <button className={shared.iconButton} aria-label="Download PNG" title="Download PNG" onClick={() => void download()} disabled={!result || !data?.glyphs.length || rendering || exporting}><Download size={18} /></button>
+          </div></div>
+          <div className={styles.paper} aria-busy={rendering}>{result && !!data?.glyphs.length && <div className={styles.resultCanvas} style={{ width: result.width, height: result.height }}>
+            <img src={imageSource(result.svg)} width={result.width} height={result.height} alt="Handwriting result" />
+            {showBoxes && !rendering && <SymbolBoxes result={result} selected={selectedBox} onSelect={setSelectedBox} />}
+          </div>}</div>
+          {showBoxes && result && !!data?.glyphs.length && !rendering && <BoxInspector placement={selectedBox === null ? undefined : result.placements[selectedBox]} />}
+        </section>
       </div>
-      <textarea className={styles.input} aria-label={mode === "latex" ? "LaTeX input" : "Text input"} value={source}
-        maxLength={MAX_WRITING_LENGTH} rows={3} spellCheck={false} onChange={(event) => setSource(event.target.value)} />
-      {mode === "latex" && <select className={styles.presets} aria-label="LaTeX presets" value="" onChange={(event) => {
-        const preset = latexPresets.find((item) => item.name === event.target.value);
-        if (preset) setSource(preset.value);
-      }}>
-        <option value="" disabled>Examples</option>
-        {latexPresets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name}</option>)}
-      </select>}
-      <div className={styles.settings}>
-        <label className={styles.dataset}><span>Dataset</span><select value={datasetId} disabled={loading || !datasets.length} onChange={(event) => setDatasetId(event.target.value)}>
-          {!datasets.length && <option value="">{loading ? "Loading…" : "No datasets"}</option>}
-          {datasets.map((item) => <option key={item.id} value={item.id}>{item.name}{item.analysisStatus === "complete" ? "" : ` · ${analysisLabels[item.analysisStatus]}`}</option>)}
-        </select></label>
-        <label className={styles.slider}><span>Size <output>{settings.size} px</output></span><input aria-label="Size" type="range" min={20} max={96} value={settings.size} onChange={(e) => setSettings((s) => ({ ...s, size: Number(e.target.value) }))} /></label>
-        <div className={styles.variation}><label className={styles.slider}><span>Variation <output>{settings.variation}%</output></span><input aria-label="Variation" type="range" min={0} max={100} value={settings.variation} onChange={(e) => setSettings((s) => ({ ...s, variation: Number(e.target.value) }))} /></label>
-          <button className={shared.iconButton} aria-label="Reshuffle variation" title="Reshuffle variation" disabled={!settings.variation} onClick={() => setSettings((s) => ({ ...s, seed: s.seed + 1 }))}><Shuffle size={17} /></button>
+      <aside className={styles.sidebar} aria-label="Writing settings">
+        <div className={styles.settings}>
+          <label className={styles.dataset}><span>Dataset</span><select value={datasetId} disabled={loading || !datasets.length} onChange={(event) => setDatasetId(event.target.value)}>
+            {!datasets.length && <option value="">{loading ? "Loading…" : "No datasets"}</option>}
+            {datasets.map((item) => <option key={item.id} value={item.id}>{item.name}{item.analysisStatus === "complete" ? "" : ` · ${analysisLabels[item.analysisStatus]}`}</option>)}
+          </select></label>
+          <label className={styles.slider}><span>Size <output>{settings.size} px</output></span><input aria-label="Size" type="range" min={20} max={96} value={settings.size} onChange={(e) => setSettings((s) => ({ ...s, size: Number(e.target.value) }))} /></label>
+          <div className={styles.variation}><label className={styles.slider}><span>Variation <output>{settings.variation}%</output></span><input aria-label="Variation" type="range" min={0} max={100} value={settings.variation} onChange={(e) => setSettings((s) => ({ ...s, variation: Number(e.target.value) }))} /></label>
+            <button className={shared.iconButton} aria-label="Reshuffle variation" title="Reshuffle variation" disabled={!settings.variation && !settings.verticalScatter} onClick={() => setSettings((s) => ({ ...s, seed: s.seed + 1 }))}><Shuffle size={17} /></button>
+          </div>
+          <label className={styles.slider}><span>Vertical scatter <output>{settings.verticalScatter} px</output></span><input aria-label="Vertical scatter" type="range" min={0} max={30} value={settings.verticalScatter} onChange={(e) => setSettings((s) => ({ ...s, verticalScatter: Number(e.target.value) }))} /></label>
         </div>
-      </div>
-      <details className={styles.spacing}><summary>Spacing</summary><div>
-        <InsetControls label="Padding" value={settings.padding} onChange={(padding) => setSettings((s) => ({ ...s, padding }))} />
-        <InsetControls label="Margin" value={settings.margin} onChange={(margin) => setSettings((s) => ({ ...s, margin }))} />
-        {mode === "text" && <>
-        <label className={styles.slider}><span>Letter spacing <output>{settings.letterSpacing} px</output></span><input aria-label="Letter spacing" type="range" min={0} max={16} value={settings.letterSpacing} onChange={(e) => setSettings((s) => ({ ...s, letterSpacing: Number(e.target.value) }))} /></label>
-        <label className={styles.slider}><span>Line spacing <output>{settings.lineSpacing.toFixed(1)}</output></span><input aria-label="Line spacing" type="range" min={1.2} max={2.8} step={0.1} value={settings.lineSpacing} onChange={(e) => setSettings((s) => ({ ...s, lineSpacing: Number(e.target.value) }))} /></label>
-        </>}
-      </div><button className={shared.secondaryButton} onClick={() => setSettings((s) => ({ ...s, padding: DEFAULT_WRITING_SETTINGS.padding, margin: DEFAULT_WRITING_SETTINGS.margin, letterSpacing: DEFAULT_WRITING_SETTINGS.letterSpacing, lineSpacing: DEFAULT_WRITING_SETTINGS.lineSpacing }))}>Reset spacing</button></details>
-      {data && data.glyphs.length > 0 && <div className={styles.coverage} aria-label="Available symbols">{data.glyphs.map((glyph) => <span key={glyph.latex} title={glyph.latex}>
-        <Latex value={glyph.latex} />
-        <img className={styles.medoid} src={glyph.image} width={glyph.width} height={glyph.height} alt={`${glyph.latex} medoid`} />
-      </span>)}</div>}
-      {error && <div role="alert" className={shared.error}>{error}<button className={shared.secondaryButton} onClick={() => void refresh()}>Retry</button></div>}
-      {unavailable && <div className={styles.notice}><span>{data.approved ? `${analysisLabels[data.status]}.` : "Dataset needs approval."}</span>
-        <Link href={`/dev/dataset/${data.approved ? "analysis" : "labeling"}/${data.id}`} className={shared.secondaryButton}>{data.approved ? "Analysis" : "Review dataset"}</Link></div>}
-      {renderError && <div role="alert" className={shared.error}>{renderError}</div>}
-      {!!data?.glyphs.length && !!result?.missing.length && <div className={styles.missing} role="status"><span>Missing symbols</span><div>{result.missing.map((label) => <code key={label}>{label}</code>)}</div></div>}
-      {!!result?.unsupported.length && <div className={shared.error} role="status">Unsupported layout: {result.unsupported.join(", ")}</div>}
-      {mode === "latex" && <section className={styles.preview} aria-label="LaTeX preview"><h2>LaTeX</h2>
-        <div className={styles.paper} aria-busy={rendering}>{result?.preview && <img src={imageSource(result.preview.svg)} width={result.preview.width} height={result.preview.height} alt="LaTeX preview" />}</div>
-      </section>}
-      <section className={styles.preview} aria-label="Handwriting result">
-        <div className={styles.outputHeading}><div><h2>Handwriting</h2><label className={styles.boxToggle}><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />Boxes</label></div><div>
-          {(rendering || (datasetId && !data && !error)) && <LoaderCircle className={shared.spinner} size={17} role="status" aria-label="Rendering" />}
-          <button className={shared.iconButton} aria-label="Download PNG" title="Download PNG" onClick={() => void download()} disabled={!result || !data?.glyphs.length || rendering || exporting}><Download size={18} /></button>
-        </div></div>
-        <div className={styles.paper} aria-busy={rendering}>{result && !!data?.glyphs.length && <div className={styles.resultCanvas} style={{ width: result.width, height: result.height }}>
-          <img src={imageSource(result.svg)} width={result.width} height={result.height} alt="Handwriting result" />
-          {showBoxes && !rendering && <SymbolBoxes result={result} selected={selectedBox} onSelect={setSelectedBox} />}
-        </div>}</div>
-        {showBoxes && result && !!data?.glyphs.length && !rendering && <BoxInspector placement={selectedBox === null ? undefined : result.placements[selectedBox]} />}
-      </section>
+        <details className={styles.spacing}><summary>Spacing</summary><div>
+          <InsetControls label="Padding" value={settings.padding} onChange={(padding) => setSettings((s) => ({ ...s, padding }))} />
+          <InsetControls label="Margin" value={settings.margin} onChange={(margin) => setSettings((s) => ({ ...s, margin }))} />
+          {mode === "text" && <>
+          <label className={styles.slider}><span>Letter spacing <output>{settings.letterSpacing} px</output></span><input aria-label="Letter spacing" type="range" min={0} max={16} value={settings.letterSpacing} onChange={(e) => setSettings((s) => ({ ...s, letterSpacing: Number(e.target.value) }))} /></label>
+          <label className={styles.slider}><span>Line spacing <output>{settings.lineSpacing.toFixed(1)}</output></span><input aria-label="Line spacing" type="range" min={1.2} max={2.8} step={0.1} value={settings.lineSpacing} onChange={(e) => setSettings((s) => ({ ...s, lineSpacing: Number(e.target.value) }))} /></label>
+          </>}
+        </div><button className={shared.secondaryButton} onClick={() => setSettings((s) => ({ ...s, padding: DEFAULT_WRITING_SETTINGS.padding, margin: DEFAULT_WRITING_SETTINGS.margin, letterSpacing: DEFAULT_WRITING_SETTINGS.letterSpacing, lineSpacing: DEFAULT_WRITING_SETTINGS.lineSpacing }))}>Reset spacing</button></details>
+      </aside>
     </div>
   </main>;
 }
