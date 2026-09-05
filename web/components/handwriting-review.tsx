@@ -180,7 +180,7 @@ export function HandwritingReview({ datasetId }: { datasetId: string }) {
 
   return <main className={styles.app} lang="en">
     <header className={styles.topbar}>
-      <Link href="/dev/labeling" className={styles.brand}><ArrowLeft size={17} />Datasets</Link>
+      <Link href="/dev/dataset/labeling" className={styles.brand}><ArrowLeft size={17} />Datasets</Link>
       {session && <nav className={styles.nav} aria-label="Review views">
         <button aria-current={mode === "queue" ? "page" : undefined}
           onClick={() => { setMode("queue"); setSelectedId(null); }} disabled={busy}>Review</button>

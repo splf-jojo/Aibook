@@ -8,8 +8,8 @@ export default function DevHome() {
     <div className={styles.homeContent}>
       <h1>Dev</h1>
       <nav className={styles.homeLinks} aria-label="Dev tools">
-        <Link href="/dev/labeling">Labeling<ArrowUpRight size={24} /></Link>
-        <Link href="/dev/analysis">Analysis<ArrowUpRight size={24} /></Link>
+        <Link href="/dev/dataset">Datasets<ArrowUpRight size={24} /></Link>
+        <Link href="/dev/writing">Writing<ArrowUpRight size={24} /></Link>
       </nav>
     </div>
   </main>;

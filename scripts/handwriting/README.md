@@ -1,12 +1,15 @@
 # Handwriting dev tools
 
-- `/dev` — **Labeling** and **Analysis**.
-- `/dev/labeling` — persistent dataset catalog and **Add dataset**.
-- `/dev/labeling/[id]` — human review, gallery, approval and export.
-- `/dev/analysis` — approved datasets; `/dev/analysis/[id]` computes and displays
+- `/dev` — **Datasets** and **Writing**.
+- `/dev/dataset` — **Analysis** and **Labeling**.
+- `/dev/dataset/labeling` — persistent dataset catalog and **Add dataset**.
+- `/dev/dataset/labeling/[id]` — human review, gallery, approval and export.
+- `/dev/dataset/analysis` — approved datasets; `/dev/dataset/analysis/[id]` computes and displays
   **Symbol | Heatmap | Medoid**. Switch between **Centered** and **Aligned**;
   open a sample count to inspect the normalized examples.
-- `/dev/handwriting` redirects to the labeling catalog.
+- `/dev/writing` — text/LaTeX input, available medoids, settings and handwriting.
+- Old `/dev/analysis`, `/dev/labeling` and their dataset links redirect to the
+  new routes. `/dev/handwriting` redirects to the labeling catalog.
 
 All dev UI labels and errors are English. Follow `docs/UI_DESIGN_PROMPT.md`.
 
@@ -96,6 +99,7 @@ These Next.js routes are under `/dev`, separate from the FastAPI `/api` prefix:
 | PATCH | `/dev/datasets/[id]` | Versioned `decide`, `undo` or `approve` command |
 | GET | `/dev/datasets/[id]/analysis` | Current results, eligible counts or progress |
 | POST | `/dev/datasets/[id]/analysis` | Compute analysis with `{ expectedVersion }` |
+| GET | `/dev/datasets/[id]/writing` | Current medoids as transparent PNGs |
 
 Every PATCH includes `expectedVersion`. A decide command also includes
 `sampleId`, `status`, `latex`, and optionally `issue`. Responses contain the saved
@@ -157,6 +161,43 @@ Implementation: `web/lib/handwriting-analysis.server.ts`, shared settings/types
 in `handwriting-analysis.ts`, persistence in `handwriting-store.server.ts`.
 PNG decoding and resizing use [Sharp](https://sharp.pixelplumbing.com/api-resize/).
 
+## Writing
+
+Select an analyzed dataset, enter **Text** or **LaTeX**, and adjust **Size** and
+**Variation**. The available symbols are shown below the dataset selector.
+Text also has letter and line spacing under **Spacing**, and wraps to the result
+panel width. LaTeX keeps mathematical spacing and supports the installed MathJax
+base/AMS syntax, including fractions, superscripts, subscripts and aligned arrays.
+Optional outer `$...$`, `$$...$$`, `\(...\)` or `\[...\]` delimiters are accepted.
+
+The normal mathematical preview uses MathJax's SVG output. Each supported symbol
+in the handwriting result is a real medoid, fitted proportionally into the math
+layout. Adjacent `dx`/`dy` atoms and function names such as `\sin` can use their
+whole saved medoid. Compound matches cannot cross script or fraction boundaries.
+Fraction bars and other structural rules are geometric strokes; missing symbol
+outlines are never filled by a standard font. Missing symbols appear as red
+dashed boxes and in **Missing symbols**. Unsupported commands/layouts and invalid
+LaTeX are reported explicitly. The normal preview remains available even before
+a dataset has usable medoids.
+
+The Writing endpoint reads the current analysis, takes only successful medoids,
+crops their normalized padding and converts white paper to transparent pixels.
+It does not modify images on disk, review decisions or approval. Unapproved,
+outdated or uncomputed analyses return no glyphs; the page links to review or
+analysis. Returning to the browser tab refreshes dataset availability.
+
+Variation applies bounded changes of position, rotation (up to 5 degrees) and
+uniform scale (up to 6%); it does not synthesize strokes. A fixed seed makes it
+repeatable. At zero variation the seed has no effect; **Reshuffle variation**
+changes the seed. **Download PNG** exports the displayed result, including visible
+missing-symbol markers. Input/settings stay in the current page session.
+
+Limits: 2,000 input characters, 600 MathJax paths/text elements, bounded formula
+and image dimensions. Runtime code is in `handwriting-writing*.ts`; the existing
+canvas formula renderer is separate. SVG conversion uses the installed
+[MathJax SVG output](https://docs.mathjax.org/en/v3.2/options/output/svg.html) with
+self-contained paths and no remote fonts or TeX extension loading.
+
 ## Подготовка вырезок
 
 `build_candidates.py` **не выполняет OCR или автоматическую сегментацию**.
@@ -197,6 +238,7 @@ Set-Location web
 node tests/handwriting-dataset.test.mjs
 node tests/handwriting-library.test.mjs
 node tests/handwriting-analysis.test.mjs
+node tests/handwriting-writing.test.mjs
 npm run typecheck
 ```
 

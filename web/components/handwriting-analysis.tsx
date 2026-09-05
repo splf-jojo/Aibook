@@ -61,7 +61,7 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
   const hasResults = data?.symbols.some((symbol) => symbol.result?.status === "complete");
   return <main className={styles.app} lang="en">
     <header className={styles.topbar}>
-      <Link href="/dev/analysis" className={styles.brand}><ArrowLeft size={17} />Datasets</Link>
+      <Link href="/dev/dataset/analysis" className={styles.brand}><ArrowLeft size={17} />Datasets</Link>
       <div className={styles.tools}><Link href="/dev" className={styles.iconButton} aria-label="Dev home" title="Dev home"><Home size={18} /></Link></div>
     </header>
     <div className={styles.libraryContent}>
@@ -76,7 +76,7 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
           </button>}
         </div>
         {!data.approved ? <div className={styles.emptyLibrary}>
-          <p>Approve this dataset before analysis.</p><Link href={`/dev/labeling/${datasetId}`} className={styles.secondaryButton}>Review dataset</Link>
+          <p>Approve this dataset before analysis.</p><Link href={`/dev/dataset/labeling/${datasetId}`} className={styles.secondaryButton}>Review dataset</Link>
         </div> : <>
           <div className={styles.analysisToolbar}>
             {hasResults ? <>
@@ -98,7 +98,7 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
                   {ready ? <button className={styles.sampleCount} aria-expanded={open} aria-controls={`samples-${index}`} onClick={() => setExpanded(open ? null : symbol.latex)}>{symbol.count} samples</button>
                     : <span className={styles.datasetMeta}>{symbol.count} samples</span>}
                 </th>
-                {result?.status === "failed" ? <td colSpan={2} className={styles.analysisFailure}>{result.error} <Link href={`/dev/labeling/${datasetId}`}>Review</Link></td> : <>
+                {result?.status === "failed" ? <td colSpan={2} className={styles.analysisFailure}>{result.error} <Link href={`/dev/dataset/labeling/${datasetId}`}>Review</Link></td> : <>
                   <td>{ready ? <img className={styles.analysisImage} src={ready.heatmap[alignment]} width={ready.width} height={ready.height} alt={`${symbol.latex} ${alignment} heatmap`} /> : <span aria-label="Heatmap not calculated">—</span>}</td>
                   <td>{ready ? <img className={styles.analysisImage} src={ready.medoid.image} width={ready.width} height={ready.height} alt={`${symbol.latex} medoid`} title={`Sample ${ready.medoid.id}`} /> : <span aria-label="Medoid not selected">—</span>}</td>
                 </>}

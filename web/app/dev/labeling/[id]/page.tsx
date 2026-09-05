@@ -1,8 +1,4 @@
-import type { Metadata } from "next";
-import { HandwritingReview } from "@/components/handwriting-review";
-
-export const metadata: Metadata = { title: "Labeling · AIbook" };
-export default async function LabelingDataset({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  return <HandwritingReview key={id} datasetId={id} />;
+import { redirect } from "next/navigation";
+export default async function LegacyLabelingDataset({ params }: { params: Promise<{ id: string }> }) {
+  redirect(`/dev/dataset/labeling/${encodeURIComponent((await params).id)}`);
 }

@@ -11,10 +11,10 @@ import styles from "./handwriting-review.module.css";
 
 export function DevNavigation({ mode }: { mode: "labeling" | "analysis" }) {
   return <header className={styles.topbar}>
-    <Link href="/dev" className={styles.brand}><ArrowLeft size={17} />Dev</Link>
+    <Link href="/dev/dataset" className={styles.brand}><ArrowLeft size={17} />Datasets</Link>
     <nav className={styles.nav} aria-label="Dev tools">
-      <Link href="/dev/labeling" aria-current={mode === "labeling" ? "page" : undefined}>Labeling</Link>
-      <Link href="/dev/analysis" aria-current={mode === "analysis" ? "page" : undefined}>Analysis</Link>
+      <Link href="/dev/dataset/labeling" aria-current={mode === "labeling" ? "page" : undefined}>Labeling</Link>
+      <Link href="/dev/dataset/analysis" aria-current={mode === "analysis" ? "page" : undefined}>Analysis</Link>
     </nav>
   </header>;
 }
@@ -43,7 +43,7 @@ export function DatasetLibrary({ mode }: { mode: "labeling" | "analysis" }) {
     try {
       if (file.size > MAX_IMPORT_BYTES) throw new Error("File is too large (40 MB maximum).");
       const result = await importDataset(JSON.parse(await file.text()));
-      router.push(`/dev/labeling/${result.id}`);
+      router.push(`/dev/dataset/labeling/${result.id}`);
     } catch (err) {
       setError(err instanceof SyntaxError ? "Invalid JSON file." : err instanceof Error ? err.message : "Could not add the dataset.");
     } finally { locked.current = false; setBusy(false); }
@@ -65,10 +65,10 @@ export function DatasetLibrary({ mode }: { mode: "labeling" | "analysis" }) {
       {loading && <div className={styles.loading}><LoaderCircle className={styles.spinner} size={20} role="status" aria-label="Loading datasets" /></div>}
       {!loading && !error && !shown.length && <div className={styles.emptyLibrary}>
         <p>{mode === "analysis" ? "No approved datasets" : "No datasets"}</p>
-        {mode === "analysis" && <Link href="/dev/labeling" className={styles.secondaryButton}>Labeling<ArrowRight size={16} /></Link>}
+        {mode === "analysis" && <Link href="/dev/dataset/labeling" className={styles.secondaryButton}>Labeling<ArrowRight size={16} /></Link>}
       </div>}
       {!loading && <div className={styles.datasetList}>
-        {shown.map((item) => <Link key={item.id} href={`/dev/${mode}/${item.id}`} className={styles.datasetRow}>
+        {shown.map((item) => <Link key={item.id} href={`/dev/dataset/${mode}/${item.id}`} className={styles.datasetRow}>
           <div><span className={styles.datasetTitle}>{item.name}</span>
             <span className={styles.datasetMeta}>{mode === "analysis" ? `${item.exportable} samples · ${analysisLabels[item.analysisStatus]}`
               : `${statuses[item.status]} · ${item.total - item.pending} / ${item.total} reviewed`}</span>
