@@ -2,7 +2,6 @@
 
 import {
   ArrowLeft,
-  BookOpenText,
   Brush,
   ChevronLeft,
   ChevronRight,
@@ -17,11 +16,8 @@ import {
   MousePointer2,
   PenLine,
   SendHorizontal,
-  Shapes,
   Sparkles,
   Spline,
-  Star,
-  Sigma,
   Scan,
   X,
 } from "lucide-react";
@@ -60,6 +56,7 @@ import companion from "./canvas-companion.module.css";
 import { CanvasAiSettings } from "./canvas-ai-settings";
 import { CanvasConversation } from "./canvas-conversation";
 import { useCanvasZoom } from "./use-canvas-zoom";
+import viewportStyles from "./canvas-viewport.module.css";
 
 type Tool = "brush" | "eraser" | "select";
 type EraserMode = "normal" | "object";
@@ -70,7 +67,6 @@ type StageSize = { width: number; height: number };
 type ExportedImage = { dataUrl: string; width: number; height: number };
 type SceneClipboard = { elements: SceneElement[]; bounds: SelectionRect };
 type CanvasContextMenu = { x: number; y: number; point: Point };
-type SavedLatexFormula = { id: string; title: string; latex: string };
 type AiChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -176,20 +172,8 @@ const PAGE_HEIGHT = 1123;
 const MIN_SELECTION_SIZE = 3;
 const STROKE_ERASER_RADIUS = 13;
 const ERASER_LONG_PRESS_MS = 500;
-const SAVED_LATEX_KEY = "canvas_saved_latex_formulas";
 const LARGE_OPERATOR_FONT = '"KaTeX_Size2", "Cambria Math", "STIX Two Math", serif';
 const LARGE_OPERATOR_SYMBOLS = new Set(["∫", "∮", "∬", "∭", "∑", "∏"]);
-const LATEX_EXAMPLES = [
-  {
-    id: "latex-example-double-integral",
-    latex: String.raw`\int_0^1 \int_0^{\sqrt{1-x^2}} (x^2+y^2)e^{x+y}\,dy\,dx`,
-  },
-  {
-    id: "latex-example-quadratic",
-    latex: String.raw`x_{1,2}=\frac{-b\pm\sqrt{b^2-4ac}}{2a}`,
-  },
-] as const;
-
 const tools: Array<{ id: Tool; Icon: typeof Brush }> = [
   { id: "brush", Icon: Brush },
   { id: "eraser", Icon: Eraser },
@@ -222,26 +206,6 @@ const UI_TEXT = {
     eraserHint: "Ластик — удерживайте для выбора режима",
     normalEraser: "Обычный ластик",
     objectEraser: "Объектный ластик",
-    savedShapes: "Сохранённые фигуры",
-    addStar: "Добавить звезду",
-    star: "Звезда",
-    addSolution: "Добавить решение задачи 2.3-11",
-    solution: "Решение 2.3-11",
-    addSummary: "Добавить конспект раздела 2.3",
-    summary: "Конспект 2.3",
-    addIntegral: "Добавить сложный интеграл",
-    complexIntegral: "Сложный интеграл",
-    addQuadratic: "Добавить формулу корней квадратного уравнения",
-    quadraticFormula: "Квадратное уравнение",
-    latexTool: "Добавить LaTeX-формулу",
-    latexModalTitle: "Новая LaTeX-формула",
-    latexPlaceholder: "Вставьте LaTeX, например: \\frac{a}{b}",
-    latexPreview: "Предпросмотр",
-    latexEmptyPreview: "Формула появится здесь",
-    invalidLatex: "Ошибка LaTeX",
-    addToShapes: "Добавить в фигуры",
-    cancel: "Отмена",
-    customFormulas: "Пользовательские формулы",
     settings: "Настройки",
     selectionActions: "Действия с выделением",
     ai1Aria: "ИИ 1 — показать решение в сайдбаре",
@@ -302,26 +266,6 @@ const UI_TEXT = {
     eraserHint: "Eraser — press and hold to choose a mode",
     normalEraser: "Normal eraser",
     objectEraser: "Object eraser",
-    savedShapes: "Saved shapes",
-    addStar: "Add a star",
-    star: "Star",
-    addSolution: "Add solution for problem 2.3-11",
-    solution: "Solution 2.3-11",
-    addSummary: "Add notes for section 2.3",
-    summary: "Notes 2.3",
-    addIntegral: "Add a complex integral",
-    complexIntegral: "Complex integral",
-    addQuadratic: "Add the quadratic formula",
-    quadraticFormula: "Quadratic formula",
-    latexTool: "Add a LaTeX formula",
-    latexModalTitle: "New LaTeX formula",
-    latexPlaceholder: "Paste LaTeX, for example: \\frac{a}{b}",
-    latexPreview: "Preview",
-    latexEmptyPreview: "The formula will appear here",
-    invalidLatex: "LaTeX error",
-    addToShapes: "Add to shapes",
-    cancel: "Cancel",
-    customFormulas: "Custom formulas",
     settings: "Settings",
     selectionActions: "Selection actions",
     ai1Aria: "AI 1 — show the solution in the sidebar",
@@ -382,26 +326,6 @@ const UI_TEXT = {
     eraserHint: "长按橡皮擦以选择模式",
     normalEraser: "普通橡皮擦",
     objectEraser: "对象橡皮擦",
-    savedShapes: "已保存的图形",
-    addStar: "添加星形",
-    star: "星形",
-    addSolution: "添加习题 2.3-11 的解答",
-    solution: "解答 2.3-11",
-    addSummary: "添加第 2.3 节笔记",
-    summary: "笔记 2.3",
-    addIntegral: "添加复杂积分",
-    complexIntegral: "复杂积分",
-    addQuadratic: "添加一元二次方程求根公式",
-    quadraticFormula: "一元二次方程求根公式",
-    latexTool: "添加 LaTeX 公式",
-    latexModalTitle: "新建 LaTeX 公式",
-    latexPlaceholder: "粘贴 LaTeX，例如：\\frac{a}{b}",
-    latexPreview: "预览",
-    latexEmptyPreview: "公式将在这里显示",
-    invalidLatex: "LaTeX 错误",
-    addToShapes: "添加到图形",
-    cancel: "取消",
-    customFormulas: "自定义公式",
     settings: "设置",
     selectionActions: "所选对象操作",
     ai1Aria: "AI 1 — 在侧边栏显示解答",
@@ -1188,16 +1112,6 @@ export function KonvaDrawingCanvas({
   const taskContextRef = useRef(new Map<string, { pageId: string; bounds?: SelectionRect }>());
   const pendingTaskRef = useRef<{ pageId: string; bounds: SelectionRect } | null>(null);
   const canvasAiBusy = sidebarBusy || Boolean(solution);
-  const [latexLayoutBusy, setLatexLayoutBusy] = useState(false);
-  const [shapesOpen, setShapesOpen] = useState(false);
-  const [latexModalOpen, setLatexModalOpen] = useState(false);
-  const [latexDraft, setLatexDraft] = useState("");
-  const [savedLatexFormulas, setSavedLatexFormulas] = useState<SavedLatexFormula[]>([]);
-  const [latexPreview, setLatexPreview] = useState<{
-    layout: ExportedImage | null;
-    error: string | null;
-    loading: boolean;
-  }>({ layout: null, error: null, loading: false });
   const text = { ...UI_TEXT[language], ...CANVAS_AI_TEXT[language] };
   const activeChat = aiChats.find((chat) => chat.id === activeChatId) ?? null;
   const petMood: CanvasPetMood = sidebarBusy ? (aiAnimationRef.current !== null ? "writing" : "thinking") : solution ? "ready" : "idle";
@@ -1246,7 +1160,6 @@ export function KonvaDrawingCanvas({
       setSelectedIds([element.id]);
       selectionRef.current = bounds;
       setSelection(bounds);
-      setShapesOpen(false);
       setEraserMenuOpen(false);
       setContextMenu(null);
     } catch {
@@ -1389,16 +1302,6 @@ export function KonvaDrawingCanvas({
     [photoLoading, queueCanvasSave, sidebarBusy, solution],
   );
 
-  const requestLatexLayout = useCallback(async (
-    latex: string, options: { maxWidth?: number; maxHeight?: number } = {}, signal?: AbortSignal,
-  ): Promise<ExportedImage> => {
-    const { renderLatexImage } = await import("@/lib/latex-image");
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    const image = await renderLatexImage(latex, 38, options.maxWidth ?? 690);
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    return image;
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
     void Promise.all([
@@ -1412,32 +1315,6 @@ export function KonvaDrawingCanvas({
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    const latex = latexDraft.trim();
-    if (!latex) {
-      setLatexPreview({ layout: null, error: null, loading: false });
-      return;
-    }
-    const controller = new AbortController();
-    setLatexPreview({ layout: null, error: null, loading: true });
-    const timer = window.setTimeout(() => {
-      void requestLatexLayout(latex, {}, controller.signal)
-        .then((layout) => setLatexPreview({ layout, error: null, loading: false }))
-        .catch((error: unknown) => {
-          if (controller.signal.aborted) return;
-          setLatexPreview({
-            layout: null,
-            error: error instanceof Error ? error.message : "Invalid LaTeX",
-            loading: false,
-          });
-        });
-    }, 200);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [latexDraft, requestLatexLayout]);
 
   const scaleX = stageSize.width / PAGE_WIDTH || 1;
   const scaleY = stageSize.height / PAGE_HEIGHT || 1;
@@ -1468,25 +1345,6 @@ export function KonvaDrawingCanvas({
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
-
-  useEffect(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(SAVED_LATEX_KEY) ?? "[]") as unknown;
-      if (!Array.isArray(stored)) return;
-      setSavedLatexFormulas(
-        stored.filter(
-          (item): item is SavedLatexFormula =>
-            typeof item === "object" &&
-            item !== null &&
-            typeof (item as SavedLatexFormula).id === "string" &&
-            typeof (item as SavedLatexFormula).title === "string" &&
-            typeof (item as SavedLatexFormula).latex === "string",
-        ),
-      );
-    } catch {
-      localStorage.removeItem(SAVED_LATEX_KEY);
-    }
-  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1520,10 +1378,7 @@ export function KonvaDrawingCanvas({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setEraserMenuOpen(false);
-        setShapesOpen(false);
         setContextMenu(null);
-        setLatexModalOpen(false);
-        setLatexDraft("");
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1909,7 +1764,7 @@ export function KonvaDrawingCanvas({
   };
 
   const submitAiDraft = async (prompt = aiDraft.trim(), selectionImage = pendingAiImage) => {
-    if (!prompt || sidebarBusy || aiSubmitRef.current || photoLoading || latexLayoutBusy) return;
+    if (!prompt || sidebarBusy || aiSubmitRef.current || photoLoading) return;
     aiSubmitRef.current = true;
     const controller = new AbortController();
     sidebarRequestRef.current = controller;
@@ -1934,116 +1789,8 @@ export function KonvaDrawingCanvas({
     await runCanvasSolution(chatId, prompt, selectionImage, controller);
   };
 
-  const addSavedStar = useCallback(() => {
-    if (canvasAiBusy) return;
-    const outerRadius = 92;
-    setElements((current) => [
-      ...current,
-      {
-        id: createId(),
-        kind: "star",
-        x: PAGE_WIDTH / 2,
-        y: PAGE_HEIGHT / 2,
-        innerRadius: outerRadius * 0.44,
-        outerRadius,
-      },
-    ]);
-    setShapesOpen(false);
-    setSelectedIds([]);
-    setSelection(null);
-  }, [canvasAiBusy]);
-
-  const addSavedCard = useCallback(
-    (card: SavedCardElement["card"]) => {
-      if (canvasAiBusy) return;
-      setElements((current) => {
-        const copies = current.filter(
-          (element) => element.kind === "saved-card" && element.card === card,
-        ).length;
-        const offset = (copies % 3) * 16;
-        const isSolution = card === "solution-2-3-11";
-        const width = isSolution ? 650 : 690;
-        const height = isSolution ? 650 : 920;
-        return [
-          ...current,
-          {
-            id: createId(),
-            kind: "saved-card",
-            card,
-            x: (PAGE_WIDTH - width) / 2 + offset,
-            y: (isSolution ? 86 : 64) + offset,
-            width,
-            height,
-          },
-        ];
-      });
-      setShapesOpen(false);
-      setSelectedIds([]);
-      setSelection(null);
-    },
-    [canvasAiBusy],
-  );
-
-  const addLatexFormula = useCallback(
-    async (templateId: string, latex: string) => {
-      if (canvasAiBusy || latexLayoutBusy) return;
-      setLatexLayoutBusy(true);
-      try {
-        const layout = await requestLatexLayout(latex, {
-          maxWidth: PAGE_WIDTH - 80,
-          maxHeight: PAGE_HEIGHT - 160,
-        });
-        const id = createId();
-        const element: ImageElement = {
-          id, kind: "image", ...layout,
-          x: (PAGE_WIDTH - layout.width) / 2, y: (PAGE_HEIGHT - layout.height) / 2,
-          source: "latex", latex, formulaInstanceId: id, latexTemplateId: templateId,
-        };
-        setElements((current) => [...current, element]);
-        setShapesOpen(false);
-        setSelectedIds([]);
-        setSelection(null);
-      } catch {
-        setSidebarOpen(true);
-        setAiError(text.formulaFailed);
-      } finally {
-        setLatexLayoutBusy(false);
-      }
-    },
-    [canvasAiBusy, latexLayoutBusy, requestLatexLayout, text.formulaFailed],
-  );
-
-  const openLatexModal = () => {
-    if (canvasAiBusy) return;
-    setLatexDraft("");
-    setLatexModalOpen(true);
-    setShapesOpen(false);
-    setEraserMenuOpen(false);
-    setContextMenu(null);
-  };
-
-  const cancelLatexModal = () => {
-    setLatexModalOpen(false);
-    setLatexDraft("");
-  };
-
-  const saveLatexFormula = () => {
-    if (latexPreview.loading || !latexPreview.layout || latexPreview.error || !latexDraft.trim()) return;
-    const formula: SavedLatexFormula = {
-      id: createId(),
-      title: `LaTeX ${savedLatexFormulas.length + 1}`,
-      latex: latexDraft.trim(),
-    };
-    const next = [...savedLatexFormulas, formula];
-    setSavedLatexFormulas(next);
-    localStorage.setItem(SAVED_LATEX_KEY, JSON.stringify(next));
-    setLatexModalOpen(false);
-    setLatexDraft("");
-  };
-
   const activateTool = useCallback((nextTool: Tool) => {
     setTool(nextTool);
-    setShapesOpen(false);
     setEraserMenuOpen(false);
     setContextMenu(null);
     if (nextTool !== "select") {
@@ -2060,7 +1807,6 @@ export function KonvaDrawingCanvas({
       eraserLongPressTriggeredRef.current = true;
       eraserPressTimerRef.current = null;
       setTool("eraser");
-      setShapesOpen(false);
       setSelectedIds([]);
       setSelection(null);
       setEraserMenuOpen(true);
@@ -2086,7 +1832,6 @@ export function KonvaDrawingCanvas({
     setEraserMode(mode);
     setTool("eraser");
     setEraserMenuOpen(false);
-    setShapesOpen(false);
     setSelectedIds([]);
     setSelection(null);
   };
@@ -2148,7 +1893,7 @@ export function KonvaDrawingCanvas({
   }, [canvasAiBusy]);
 
   const prepareSelectedTask = (solveImmediately: boolean) => {
-    if (!selection || !selectedIds.length || canvasAiBusy || photoLoading || latexLayoutBusy) return;
+    if (!selection || !selectedIds.length || canvasAiBusy || photoLoading) return;
     const selectionImage = exportSelection(selection);
     if (!selectionImage) return;
     pendingTaskRef.current = { pageId: canvasPagesRef.current[activePageIndexRef.current].id, bounds: selection };
@@ -2267,7 +2012,6 @@ export function KonvaDrawingCanvas({
     event.evt.preventDefault();
     const point = pointFromStage();
     if (!point) return;
-    setShapesOpen(false);
     setEraserMenuOpen(false);
     setContextMenu({
       x: Math.max(8, Math.min(event.evt.clientX, window.innerWidth - 196)),
@@ -2339,16 +2083,6 @@ export function KonvaDrawingCanvas({
       ? selection.y * scaleY - 52
       : (selection.y + selection.height) * scaleY + 10
     : 0;
-  const latexPreviewScale = latexPreview.layout
-    ? Math.min(1, 560 / latexPreview.layout.width, 240 / latexPreview.layout.height)
-    : 1;
-  const latexPreviewWidth = latexPreview.layout
-    ? Math.max(1, Math.ceil(latexPreview.layout.width * latexPreviewScale))
-    : 0;
-  const latexPreviewHeight = latexPreview.layout
-    ? Math.max(1, Math.ceil(latexPreview.layout.height * latexPreviewScale))
-    : 0;
-
   return (
     <>
     <main className="flex h-dvh w-dvw overflow-hidden bg-[#f4f5f7]">
@@ -2487,110 +2221,6 @@ export function KonvaDrawingCanvas({
             <Scan aria-hidden="true" size={19} strokeWidth={2} />
           </button>
 
-          <div className="relative">
-            <button
-              aria-expanded={shapesOpen}
-              aria-label={text.savedShapes}
-              className={`grid size-10 place-items-center rounded-lg transition-colors ${
-                shapesOpen ? "bg-[#eff6ff] text-[#2563eb]" : "text-[#697386] hover:bg-[#eef0f3]"
-              }`}
-              onClick={() => setShapesOpen((open) => !open)}
-              title={text.savedShapes}
-              type="button"
-            >
-              <Shapes aria-hidden="true" size={19} strokeWidth={2} />
-            </button>
-            {shapesOpen && (
-              <div className="absolute left-1/2 top-12 z-20 max-h-[70vh] w-[272px] -translate-x-1/2 overflow-y-auto rounded-xl border border-[#dfe3e8] bg-white p-1.5 shadow-lg">
-                <button
-                  aria-label={text.addStar}
-                  className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-[#334155] hover:bg-[#eef0f3]"
-                  onClick={addSavedStar}
-                  title={text.star}
-                  type="button"
-                >
-                  <Star aria-hidden="true" className="shrink-0 text-[#697386]" size={19} strokeWidth={2} />
-                  <span>{text.star}</span>
-                </button>
-                <button
-                  aria-label={text.addSolution}
-                  className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-[#334155] hover:bg-[#eef0f3]"
-                  onClick={() => addSavedCard("solution-2-3-11")}
-                  title={text.solution}
-                  type="button"
-                >
-                  <Sigma aria-hidden="true" className="shrink-0 text-[#2563eb]" size={19} strokeWidth={2} />
-                  <span>{text.solution}</span>
-                </button>
-                <button
-                  aria-label={text.addSummary}
-                  className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-[#334155] hover:bg-[#eef0f3]"
-                  onClick={() => addSavedCard("summary-2-3")}
-                  title={text.addSummary}
-                  type="button"
-                >
-                  <BookOpenText
-                    aria-hidden="true"
-                    className="shrink-0 text-[#0f766e]"
-                    size={19}
-                    strokeWidth={2}
-                  />
-                  <span>{text.summary}</span>
-                </button>
-                <button
-                  aria-label={text.addIntegral}
-                  className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-[#334155] hover:bg-[#eef0f3]"
-                  onClick={() => addLatexFormula(LATEX_EXAMPLES[0].id, LATEX_EXAMPLES[0].latex)}
-                  title={text.complexIntegral}
-                  type="button"
-                >
-                  <Sigma aria-hidden="true" className="shrink-0 text-[#7c3aed]" size={19} strokeWidth={2} />
-                  <span>{text.complexIntegral}</span>
-                </button>
-                <button
-                  aria-label={text.addQuadratic}
-                  className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-[#334155] hover:bg-[#eef0f3]"
-                  onClick={() => addLatexFormula(LATEX_EXAMPLES[1].id, LATEX_EXAMPLES[1].latex)}
-                  title={text.quadraticFormula}
-                  type="button"
-                >
-                  <Sigma aria-hidden="true" className="shrink-0 text-[#7c3aed]" size={19} strokeWidth={2} />
-                  <span>{text.quadraticFormula}</span>
-                </button>
-                {savedLatexFormulas.length > 0 && (
-                  <>
-                    <div className="mx-2 my-1.5 h-px bg-[#e5e7eb]" />
-                    <div className="px-3 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wide text-[#697386]">
-                      {text.customFormulas}
-                    </div>
-                    {savedLatexFormulas.map((formula) => (
-                      <button
-                        aria-label={formula.title}
-                        className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-[#334155] hover:bg-[#eef0f3]"
-                        key={formula.id}
-                        onClick={() => addLatexFormula(formula.id, formula.latex)}
-                        title={formula.latex}
-                        type="button"
-                      >
-                        <Sigma aria-hidden="true" className="shrink-0 text-[#2563eb]" size={19} strokeWidth={2} />
-                        <span className="truncate">{formula.title}</span>
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-
-          <button
-            aria-label={text.latexTool}
-            className="grid size-10 place-items-center rounded-lg text-[#697386] hover:bg-[#eef0f3]"
-            onClick={openLatexModal}
-            title={text.latexTool}
-            type="button"
-          >
-            <Sigma aria-hidden="true" size={19} strokeWidth={2} />
-          </button>
           <input
             accept=".png,.jpeg,.jpg,image/png,image/jpeg"
             aria-label={text.addPhoto}
@@ -2638,7 +2268,7 @@ export function KonvaDrawingCanvas({
           </button>
         )}
 
-        <div ref={viewportRef} className="absolute inset-x-0 bottom-0 top-[72px] overflow-auto overscroll-contain" style={{ scrollbarGutter: "stable" }} data-canvas-zoom={zoom}>
+        <div ref={viewportRef} className={viewportStyles.viewport} data-canvas-zoom={zoom}>
         <div className="relative flex min-h-full min-w-full justify-center pb-4" style={{ width: stageSize.width + 48, height: stageSize.height + 16 }}>
         <div
           aria-label="A4 canvas"
@@ -3009,85 +2639,6 @@ export function KonvaDrawingCanvas({
             <ClipboardPaste aria-hidden="true" size={18} strokeWidth={2} />
             {text.paste}
           </button>
-        </div>
-      </div>
-    )}
-    {latexModalOpen && (
-      <div
-        className="fixed inset-0 z-50 grid place-items-center bg-[#111827]/35 p-5 backdrop-blur-[2px]"
-        onPointerDown={(event) => {
-          if (event.target === event.currentTarget) cancelLatexModal();
-        }}
-      >
-        <div
-          aria-labelledby="latex-modal-title"
-          aria-modal="true"
-          className="flex max-h-[calc(100dvh-40px)] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl border border-[#dfe3e8] bg-white shadow-2xl"
-          role="dialog"
-        >
-          <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#dfe3e8] px-5">
-            <h2 className="text-base font-semibold text-[#111827]" id="latex-modal-title">
-              {text.latexModalTitle}
-            </h2>
-            <button
-              aria-label={text.cancel}
-              className="grid size-9 place-items-center rounded-lg text-[#697386] hover:bg-[#eef0f3]"
-              onClick={cancelLatexModal}
-              type="button"
-            >
-              <X aria-hidden="true" size={18} strokeWidth={2} />
-            </button>
-          </div>
-
-          <div className="min-h-0 overflow-y-auto p-5">
-            <textarea
-              aria-label="LaTeX"
-              autoFocus
-              className="h-32 w-full resize-y rounded-xl border border-[#dfe3e8] bg-white px-3 py-2.5 font-mono text-sm leading-6 text-[#111827] placeholder:text-[#697386] focus:border-[#2563eb] focus:outline-none"
-              onChange={(event) => setLatexDraft(event.target.value)}
-              placeholder={text.latexPlaceholder}
-              spellCheck={false}
-              value={latexDraft}
-            />
-
-            <div className="mb-2 mt-4 text-sm font-medium text-[#334155]">{text.latexPreview}</div>
-            <div className="keep-white grid min-h-36 place-items-center overflow-auto rounded-xl border border-[#dfe3e8] bg-white p-4">
-              {!latexPreview.layout && !latexPreview.error && !latexPreview.loading && (
-                <div className="text-sm text-[#697386]">{text.latexEmptyPreview}</div>
-              )}
-              {latexPreview.loading && (
-                <div className="text-sm text-[#697386]">{text.processing}</div>
-              )}
-              {latexPreview.error && (
-                <div className="max-w-full break-words text-sm leading-6 text-red-600">
-                  {text.invalidLatex}: {latexPreview.error}
-                </div>
-              )}
-              {latexPreview.layout && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img alt={text.latexPreview} src={latexPreview.layout.dataUrl}
-                  width={latexPreviewWidth} height={latexPreviewHeight} />
-              )}
-            </div>
-          </div>
-
-          <div className="flex shrink-0 justify-end gap-2 border-t border-[#dfe3e8] px-5 py-4">
-            <button
-              className="h-10 rounded-xl border border-[#dfe3e8] px-4 text-sm font-medium text-[#334155] hover:bg-[#eef0f3]"
-              onClick={cancelLatexModal}
-              type="button"
-            >
-              {text.cancel}
-            </button>
-            <button
-              className="h-10 rounded-xl bg-[#2563eb] px-4 text-sm font-medium text-white hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={latexPreview.loading || !latexPreview.layout || Boolean(latexPreview.error) || !latexDraft.trim()}
-              onClick={saveLatexFormula}
-              type="button"
-            >
-              {text.addToShapes}
-            </button>
-          </div>
         </div>
       </div>
     )}

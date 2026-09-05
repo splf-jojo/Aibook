@@ -1,0 +1,9 @@
+.viewport {
+  position: absolute;
+  inset: 72px 0 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.viewport::-webkit-scrollbar { display: none; }
