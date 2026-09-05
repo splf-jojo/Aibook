@@ -2,7 +2,8 @@ import { MAX_IMPORT_BYTES } from "./handwriting-dataset.ts";
 import { LibraryError } from "./handwriting-store.server.ts";
 
 export async function readJson(request: Request, maxBytes = MAX_IMPORT_BYTES): Promise<unknown> {
-  if (Number(request.headers.get("content-length")) > maxBytes) throw new LibraryError("File is too large (40 MB maximum).", 413);
+  const tooLarge = maxBytes === MAX_IMPORT_BYTES ? "File is too large (40 MB maximum)." : "Request is too large.";
+  if (Number(request.headers.get("content-length")) > maxBytes) throw new LibraryError(tooLarge, 413);
   if (!request.body) throw new LibraryError("Choose a JSON file.");
   const reader = request.body.getReader(), chunks: Uint8Array[] = [];
   let length = 0;
@@ -11,7 +12,7 @@ export async function readJson(request: Request, maxBytes = MAX_IMPORT_BYTES): P
       const { value, done } = await reader.read();
       if (done) break;
       length += value.byteLength;
-      if (length > maxBytes) { await reader.cancel(); throw new LibraryError("File is too large (40 MB maximum).", 413); }
+      if (length > maxBytes) { await reader.cancel(); throw new LibraryError(tooLarge, 413); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }

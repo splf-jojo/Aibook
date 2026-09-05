@@ -94,12 +94,28 @@
 .emptyLibrary { padding: 48px 0; text-align: center; color: var(--muted); }
 .emptyLibrary p { margin-bottom: 20px; }
 .app a.primaryButton, .app a.secondaryButton { text-decoration: none; }
-.analysisStatus { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; margin-bottom: 24px; }
+.analysisToolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; min-height: 44px; margin-bottom: 28px; }
+.alignmentSwitch { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; }
+.alignmentSwitch button { min-height: 38px; padding: 8px 14px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; }
+.alignmentSwitch button[aria-pressed="true"] { background: #eef0e9; color: var(--ink); }
+.heatmapLegend { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+.heatmapLegend i { width: 80px; height: 8px; border-radius: 2px; border: 1px solid #ede8e2; background: linear-gradient(to right, #fff, #fef0d9, #fdcc8a, #fc8d59, #e34a33, #b30000); }
 .analysisTable { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .analysisTable th, .analysisTable td { border-bottom: 1px solid var(--line); padding: 22px 12px; text-align: center; font-weight: 400; }
 .analysisTable thead th { font-size: 12px; color: var(--muted); padding-top: 0; }
+.analysisTable thead th:first-child { width: 24%; }
 .analysisTable td { color: #a2a79b; }
 .analysisSymbol { font-size: 30px; margin-bottom: 8px; overflow-x: auto; }
+.analysisImage { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.sampleCount { min-height: 40px; padding: 8px; background: transparent; border: 0; border-radius: 6px; color: var(--muted); font-size: 12px; }
+.sampleCount:hover, .sampleCount[aria-expanded="true"] { background: #eef0e9; color: var(--ink); }
+.analysisTable .analysisFailure { color: #993e32; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.analysisFailure a { display: block; color: var(--ink); }
+.analysisTable .sampleCell { padding: 16px 0 24px; }
+.analysisSamples { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px; }
+.analysisSamples figure { margin: 0; min-width: 0; }
+.sampleImage { width: 100%; height: 80px; object-fit: contain; }
+.analysisSamples figcaption { margin-top: 8px; font-size: 11px; color: var(--muted); }
 @media (max-width: 700px) {
   .topbar { padding: 0 16px; gap: 8px; }
   .brand { font-size: 15px; }
@@ -121,4 +137,7 @@
   .libraryHeading h1 { font-size: 18px; }
   .libraryHeading .primaryButton { padding: 10px 12px; font-size: 12px; gap: 8px; }
   .analysisTable th, .analysisTable td { padding: 20px 6px; }
+  .analysisSymbol { font-size: 24px; }
+  .sampleCount { padding: 8px 2px; font-size: 11px; white-space: nowrap; }
+  .heatmapLegend i { width: 52px; }
 }

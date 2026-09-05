@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowRight, FileUp, LoaderCircle } from "lucide-react";
 import { MAX_IMPORT_BYTES } from "@/lib/handwriting-dataset";
 import { importDataset, listDatasets, type DatasetSummary } from "@/lib/handwriting-library";
+import { analysisLabels } from "@/lib/handwriting-analysis";
 import styles from "./handwriting-review.module.css";
 
 export function DevNavigation({ mode }: { mode: "labeling" | "analysis" }) {
@@ -69,7 +70,7 @@ export function DatasetLibrary({ mode }: { mode: "labeling" | "analysis" }) {
       {!loading && <div className={styles.datasetList}>
         {shown.map((item) => <Link key={item.id} href={`/dev/${mode}/${item.id}`} className={styles.datasetRow}>
           <div><span className={styles.datasetTitle}>{item.name}</span>
-            <span className={styles.datasetMeta}>{mode === "analysis" ? `${item.exportable} samples · Not analyzed`
+            <span className={styles.datasetMeta}>{mode === "analysis" ? `${item.exportable} samples · ${analysisLabels[item.analysisStatus]}`
               : `${statuses[item.status]} · ${item.total - item.pending} / ${item.total} reviewed`}</span>
           </div><ArrowRight size={18} aria-hidden="true" />
         </Link>)}

@@ -1,12 +1,13 @@
 import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import katex from "katex";
 import {
   approveDataset, datasetFingerprint, datasetStats, decide, exportDataset, freshReview, MIN_EXAMPLES,
   parseDataset, undoDecision, type CandidateDataset, type Decision, type Review,
 } from "./handwriting-dataset.ts";
 import type { AnalysisPreview, DatasetSummary, LibrarySession, ReviewUpdate } from "./handwriting-library.ts";
+import { ANALYSIS_SETTINGS, type AnalysisRecord, type AnalysisStatus } from "./handwriting-analysis.ts";
 
 export class LibraryError extends Error {
   status: number;
@@ -54,11 +55,14 @@ async function readState(id: string): Promise<State> {
   }
 }
 async function atomicState(id: string, state: State) {
-  const dir = directory(id), temporary = path.join(dir, `.state-${randomUUID()}.tmp`);
+  await atomicJson(directory(id), "state.json", state);
+}
+async function atomicJson(dir: string, filename: string, value: unknown) {
+  const temporary = path.join(dir, `.write-${randomUUID()}.tmp`);
   try {
     const handle = await open(temporary, "wx");
-    try { await handle.writeFile(JSON.stringify(state)); await handle.sync(); } finally { await handle.close(); }
-    await rename(temporary, path.join(dir, "state.json"));
+    try { await handle.writeFile(JSON.stringify(value)); await handle.sync(); } finally { await handle.close(); }
+    await rename(temporary, path.join(dir, filename));
   } finally { await rm(temporary, { force: true }); }
 }
 
@@ -136,7 +140,10 @@ export async function createDataset(input: unknown, options: { sourceCandidates?
 export async function catalog(): Promise<DatasetSummary[]> {
   await mkdir(root(), { recursive: true });
   const entries = await readdir(/* turbopackIgnore: true */ root(), { withFileTypes: true });
-  const items = await Promise.all(entries.filter((entry) => entry.isDirectory() && isId(entry.name)).map(async (entry) => (await readState(entry.name)).summary));
+  const items = await Promise.all(entries.filter((entry) => entry.isDirectory() && isId(entry.name)).map(async (entry) => {
+    const state = await readState(entry.name);
+    return { ...state.summary, analysisStatus: (await analysisInfo(entry.name, state)).status };
+  }));
   return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.name.localeCompare(b.name));
 }
 
@@ -187,7 +194,88 @@ export async function applyReviewAction(id: string, input: unknown): Promise<Rev
 }
 
 export async function analysisPreview(id: string): Promise<AnalysisPreview> {
-  const session = await readDataset(id), approved = Boolean(session.review.approvedAt);
-  return { id, name: session.name, approved, status: "not-run",
-    symbols: approved ? datasetStats(session.dataset, session.review).eligible.map((group) => ({ latex: group.latex, count: group.accepted })) : [] };
+  const state = await readState(id), approved = Boolean(state.review.approvedAt), info = await analysisInfo(id, state);
+  const preview: AnalysisPreview = { id, name: state.summary.name, sourceVersion: state.version, approved, status: info.status, symbols: [] };
+  if (!approved) return preview;
+  if (info.status === "complete" || info.status === "partial") {
+    const result = await readAnalysisRecord(id, info.key);
+    return { ...preview, symbols: result.symbols, computedAt: result.computedAt };
+  }
+  const session = await readDataset(id);
+  // A review can change while its candidate file is being loaded.
+  if (session.version !== state.version) return analysisPreview(id);
+  return { ...preview, ...(info.progress ? { progress: info.progress } : {}),
+    symbols: datasetStats(session.dataset, session.review).eligible.map((group) => ({ latex: group.latex, count: group.accepted })) };
+}
+
+type AnalysisIndex = Pick<AnalysisRecord, "key" | "sourceVersion" | "status" | "computedAt">;
+type AnalysisJob = { progress: { completed: number; total: number }; promise: Promise<void> };
+// Shared by Next route bundles in this process. A restart cannot leave a permanent running flag.
+const analysisGlobal = globalThis as typeof globalThis & { __aibookHandwritingJobs?: Map<string, AnalysisJob> };
+const analysisJobs = analysisGlobal.__aibookHandwritingJobs ??= new Map<string, AnalysisJob>();
+function analysisKey(id: string, state: Pick<State, "version" | "review">) {
+  return createHash("sha256").update(JSON.stringify({ id, version: state.version, approvedAt: state.review.approvedAt, settings: ANALYSIS_SETTINGS })).digest("hex");
+}
+function analysisDirectory(id: string) { return path.join(directory(id), "analysis"); }
+function jobKey(id: string, key: string) { return `${directory(id)}:${key}`; }
+async function analysisInfo(id: string, state: State): Promise<{ key: string; status: AnalysisStatus; progress?: AnalysisJob["progress"] }> {
+  const key = analysisKey(id, state), job = analysisJobs.get(jobKey(id, key));
+  if (state.review.approvedAt && job) return { key, status: "running", progress: { ...job.progress } };
+  let index: AnalysisIndex;
+  try { index = JSON.parse(await readFile(path.join(analysisDirectory(id), "index.json"), "utf8")); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { key, status: "not-run" };
+    throw error;
+  }
+  return { key, status: state.review.approvedAt && index.key === key ? index.status : "stale" };
+}
+async function readAnalysisRecord(id: string, key: string): Promise<AnalysisRecord> {
+  return JSON.parse(await readFile(path.join(analysisDirectory(id), `${key}.json`), "utf8"));
+}
+
+export async function runAnalysis(id: string, expectedVersion: unknown): Promise<AnalysisPreview> {
+  const session = await readDataset(id);
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== session.version) throw new LibraryError("This dataset changed. Reload before analyzing.", 409);
+  if (!session.review.approvedAt) throw new LibraryError("Approve this dataset before analysis.", 409);
+  const state = await readState(id);
+  if (state.version !== session.version) throw new LibraryError("This dataset changed. Reload before analyzing.", 409);
+  const info = await analysisInfo(id, state), key = info.key, runningKey = jobKey(id, key);
+  if (info.status === "complete") return analysisPreview(id);
+  let job = analysisJobs.get(runningKey);
+  if (!job) {
+    if (analysisJobs.size >= 2) throw new LibraryError("Another analysis is running. Try again shortly.", 409);
+    const eligible = datasetStats(session.dataset, session.review).eligible;
+    if (!eligible.length) throw new LibraryError(`At least ${MIN_EXAMPLES} accepted samples of one symbol are required.`);
+    const progress = { completed: 0, total: eligible.length };
+    const promise = Promise.resolve().then(async () => {
+      const { analyzeSymbol } = await import("./handwriting-analysis.server.ts");
+      const symbols: AnalysisRecord["symbols"] = [], deadline = Date.now() + 120_000;
+      for (const group of eligible) {
+        const samples = session.dataset.samples.filter((sample) => {
+          const decision = session.review.decisions[sample.id];
+          return decision?.status === "accepted" && decision.latex === group.latex;
+        });
+        try {
+          if (Date.now() > deadline) throw new Error("Analysis time limit reached. Try a smaller dataset.");
+          symbols.push({ latex: group.latex, count: samples.length, result: await analyzeSymbol(group.latex, samples) });
+        } catch (error) {
+          symbols.push({ latex: group.latex, count: samples.length, result: { status: "failed", error: error instanceof Error ? error.message : "Could not analyze this symbol." } });
+        }
+        progress.completed++;
+      }
+      const result: AnalysisRecord = { schemaVersion: 1, key, datasetId: id, sourceVersion: session.version,
+        approvedAt: session.review.approvedAt!, settings: ANALYSIS_SETTINGS, computedAt: new Date().toISOString(),
+        status: symbols.every((symbol) => symbol.result?.status === "complete") ? "complete" : "partial", symbols };
+      const dir = analysisDirectory(id);
+      await mkdir(dir, { recursive: true });
+      await atomicJson(dir, `${key}.json`, result);
+      // Saved results retain their source version; a concurrent review can never make them current.
+      const current = await readState(id);
+      if (current.version !== session.version) throw new LibraryError("The review changed during analysis. Approve it again, then reanalyze.", 409);
+      await atomicJson(dir, "index.json", { key, sourceVersion: session.version, status: result.status, computedAt: result.computedAt } satisfies AnalysisIndex);
+    }).finally(() => { analysisJobs.delete(runningKey); });
+    job = { progress, promise }; analysisJobs.set(runningKey, job);
+  }
+  await job.promise;
+  return analysisPreview(id);
 }

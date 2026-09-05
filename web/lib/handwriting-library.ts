@@ -1,4 +1,5 @@
 import type { Decision, Review, ReviewSession } from "./handwriting-dataset.ts";
+import type { AnalysisStatus, AnalysisSymbol } from "./handwriting-analysis.ts";
 
 export type DatasetSummary = {
   id: string;
@@ -11,7 +12,7 @@ export type DatasetSummary = {
   rejected: number;
   exportable: number;
   status: "unreviewed" | "in-progress" | "reviewed" | "approved";
-  analysisStatus: "not-run";
+  analysisStatus: AnalysisStatus;
 };
 
 export type LibrarySession = ReviewSession & { name: string; version: number };
@@ -22,7 +23,10 @@ export type ReviewCommand =
 ;
 export type ReviewAction = ReviewCommand & { expectedVersion: number };
 export type ReviewUpdate = { review: Review; version: number; selectedId?: string };
-export type AnalysisPreview = { id: string; name: string; approved: boolean; status: "not-run"; symbols: { latex: string; count: number }[] };
+export type AnalysisPreview = {
+  id: string; name: string; approved: boolean; sourceVersion: number; status: AnalysisStatus;
+  symbols: AnalysisSymbol[]; computedAt?: string; progress?: { completed: number; total: number };
+};
 
 async function response<T>(result: Response): Promise<T> {
   const body = await result.json().catch(() => null);
@@ -33,6 +37,9 @@ async function response<T>(result: Response): Promise<T> {
 export const listDatasets = () => fetch("/dev/datasets", { cache: "no-store" }).then(response<DatasetSummary[]>);
 export const loadDataset = (id: string) => fetch(`/dev/datasets/${id}`, { cache: "no-store" }).then(response<LibrarySession>);
 export const loadAnalysis = (id: string) => fetch(`/dev/datasets/${id}/analysis`, { cache: "no-store" }).then(response<AnalysisPreview>);
+export const startAnalysis = (id: string, expectedVersion: number) => fetch(`/dev/datasets/${id}/analysis`, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedVersion }),
+}).then(response<AnalysisPreview>);
 export const importDataset = (dataset: unknown) => fetch("/dev/datasets", {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataset }),
 }).then(response<DatasetSummary>);

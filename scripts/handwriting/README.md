@@ -1,11 +1,11 @@
-# Handwriting dev tools — phase 1
+# Handwriting dev tools
 
 - `/dev` — **Labeling** and **Analysis**.
 - `/dev/labeling` — persistent dataset catalog and **Add dataset**.
 - `/dev/labeling/[id]` — human review, gallery, approval and export.
-- `/dev/analysis` — approved datasets; `/dev/analysis/[id]` lists eligible symbols
-  in **Symbol | Heatmap | Medoid** order. Analysis is not implemented in phase 1:
-  **Analyze** is disabled, and no heatmaps or medoids are fabricated.
+- `/dev/analysis` — approved datasets; `/dev/analysis/[id]` computes and displays
+  **Symbol | Heatmap | Medoid**. Switch between **Centered** and **Aligned**;
+  open a sample count to inspect the normalized examples.
 - `/dev/handwriting` redirects to the labeling catalog.
 
 All dev UI labels and errors are English. Follow `docs/UI_DESIGN_PROMPT.md`.
@@ -36,6 +36,8 @@ candidate pack:
 - `candidates.json` — immutable crops, labels and PDF provenance.
 - `state.json` — display name, review decisions, undo history, approval and version.
 - `original-approved.json` — archived imported approval, when present.
+- `analysis/index.json` — latest analysis metadata.
+- `analysis/[key].json` — computed images, measurements, settings and source version.
 
 The whole `data/handwriting/` tree is ignored by Git and excluded from image
 tracing. Back up this folder separately. Dataset names never become filesystem
@@ -92,12 +94,68 @@ These Next.js routes are under `/dev`, separate from the FastAPI `/api` prefix:
 | POST | `/dev/datasets` | Import `{ dataset: candidatePack }` |
 | GET | `/dev/datasets/[id]` | Dataset and current review |
 | PATCH | `/dev/datasets/[id]` | Versioned `decide`, `undo` or `approve` command |
-| GET | `/dev/datasets/[id]/analysis` | Approval state and eligible symbol counts |
+| GET | `/dev/datasets/[id]/analysis` | Current results, eligible counts or progress |
+| POST | `/dev/datasets/[id]/analysis` | Compute analysis with `{ expectedVersion }` |
 
 Every PATCH includes `expectedVersion`. A decide command also includes
 `sampleId`, `status`, `latex`, and optionally `issue`. Responses contain the saved
 `review` and new `version`; undo also returns `selectedId`. Stale writes return
-409. JSON responses are not cached. There is no analysis computation endpoint.
+409. HTTP responses are not cached; valid computed results are reused from disk.
+
+## Analysis — phase 2
+
+Only accepted samples grouped by their **reviewed** LaTeX label participate.
+The dataset must remain approved, and each class needs at least three examples.
+Rare classes and rejected crops do not get a heatmap or a medoid. No labels,
+approval decisions, outliers or missing strokes are inferred or changed.
+
+1. Decode each PNG with Sharp, flatten transparency onto white and convert to
+   grayscale. Reject malformed, multi-page, empty or over-4-million-pixel images.
+2. Trim the bounding box at 12% ink coverage. Resize proportionally into a
+   128×128 canvas with 16 px padding; `\sin`, `\cos`, `dx`, `dy` use 256×128.
+   Center by ink mass, reserving enough margin for alignment. There is no
+   rotation, slant correction, independent axis stretching or stroke cleanup.
+3. Extract contours at 25% ink coverage. Compare each pair with the symmetric
+   mean nearest-contour distance, approximated by an 8-neighbour chamfer field
+   (horizontal/vertical cost 1, diagonal cost √2). Search translations within
+   ±6 px on both axes. This measures outline similarity, not recognition confidence.
+4. Choose the real sample minimizing the sum of these pairwise distances.
+   Ties are resolved by sample ID. This is the medoid; its displayed image is
+   its normalized crop. Align the other examples to this sample by translation.
+5. Average grayscale ink coverage per pixel, once before and once after the
+   translation. Heatmaps share a fixed 0–100% white-to-dark-red scale, without
+   renormalizing each image's maximum. A dark pixel means repeated ink coverage.
+
+Saved results contain both heatmaps, 8-bit grayscale density maps (0 = no ink,
+255 = full coverage), every centered/aligned sample, source PDF coordinates,
+original pixel sizes, trim boxes, scale, offsets, shifts, distances and medoid ID.
+The original PNGs remain in `candidates.json`. Pixel distances compare examples
+within one class; normalization removes absolute writing size. The PDF metrics
+remain available for future formula layout. Raster normalization does not recover
+pen trajectories or train a font.
+
+One invalid accepted crop fails its entire symbol group; other groups can finish.
+The page shows the affected group and a Review link, and the catalog says
+**Incomplete**. No accepted sample is silently removed. Current local limits are
+64 samples per class, 60 seconds of pair comparisons per class, and a 120-second
+budget checked between groups. Oversized/unfinished groups get an explicit error.
+
+The cache key covers dataset fingerprint, review version, approval timestamp and
+all algorithm settings. Any changed/undone decision clears approval and hides
+old results; after approval, **Reanalyze** computes a new version. Results from
+earlier review versions remain on disk. Computation never writes `state.json`
+or the imported approval. Bump the algorithm version when changing computation
+or its image-processing dependency so an older cache cannot be reused.
+Concurrent requests in one web process share a promise and progress; at most two
+datasets run at once. POST waits for completion, while GET can report progress.
+A process restart drops in-memory work but retains completed results. Multiple
+processes may duplicate computation; versioned atomic files prevent partial
+publication, and readers always compare the cache key with the current review.
+This is a local process model, not a distributed job queue.
+
+Implementation: `web/lib/handwriting-analysis.server.ts`, shared settings/types
+in `handwriting-analysis.ts`, persistence in `handwriting-store.server.ts`.
+PNG decoding and resizing use [Sharp](https://sharp.pixelplumbing.com/api-resize/).
 
 ## Подготовка вырезок
 
@@ -132,19 +190,13 @@ python scripts/handwriting/build_candidates.py --notes C:\path\to\notes --manife
 Первая версия сборщика требует PDF без поворота, с совпадающими media/crop boxes
 и нулевым началом координат; несовместимые документы отклоняются явно.
 
-## Next phase
-
-Phase 2 adds proportional normalization, alignment, heatmaps, medoid selection,
-and saved analysis results keyed to the reviewed data and analysis settings.
-The current output remains reviewed PDF crops, not recovered pen trajectories
-or a trained font. Changed crops must be reviewed again.
-
 ## Checks
 
 ```powershell
 Set-Location web
 node tests/handwriting-dataset.test.mjs
 node tests/handwriting-library.test.mjs
+node tests/handwriting-analysis.test.mjs
 npm run typecheck
 ```
 
