@@ -55,6 +55,11 @@ import { CANVAS_AI_TEXT } from "@/lib/canvas-ai-text";
 import { CanvasHandwriting, useCanvasHandwriting } from "./canvas-handwriting";
 import type { HandwritingSnapshot } from "@/lib/canvas-handwriting";
 import { createSolutionHistoryEntry, undoSolution, redoSolution, type SolutionHistoryEntry } from "@/lib/canvas-solution-history";
+import { CanvasPet, type CanvasPetMood } from "./canvas-pet";
+import companion from "./canvas-companion.module.css";
+import { CanvasAiSettings } from "./canvas-ai-settings";
+import { CanvasConversation } from "./canvas-conversation";
+import { useCanvasZoom } from "./use-canvas-zoom";
 
 type Tool = "brush" | "eraser" | "select";
 type EraserMode = "normal" | "object";
@@ -1129,7 +1134,6 @@ export function KonvaDrawingCanvas({
   const stageRef = useRef<Konva.Stage | null>(null);
   const selectionLayerRef = useRef<Konva.Layer | null>(null);
   const sceneLayerRef = useRef<Konva.Layer | null>(null);
-  const chatScrollRef = useRef<HTMLDivElement>(null);
   const drawingRef = useRef(false);
   const startRef = useRef<Point | null>(null);
   const draggingSelectionRef = useRef(false);
@@ -1150,7 +1154,8 @@ export function KonvaDrawingCanvas({
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const eraserPressTimerRef = useRef<number | null>(null);
   const eraserLongPressTriggeredRef = useRef(false);
-  const [stageSize, setStageSize] = useState<StageSize>({ width: 0, height: 0 });
+  const [fitSize, setFitSize] = useState<StageSize>({ width: 0, height: 0 });
+  const { stageSize, viewportRef, zoom } = useCanvasZoom(fitSize, () => drawingRef.current || draggingSelectionRef.current);
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [elements, setElements] = useState<SceneElement[]>(
     () => initialPage.elements as SceneElement[],
@@ -1195,14 +1200,10 @@ export function KonvaDrawingCanvas({
   }>({ layout: null, error: null, loading: false });
   const text = { ...UI_TEXT[language], ...CANVAS_AI_TEXT[language] };
   const activeChat = aiChats.find((chat) => chat.id === activeChatId) ?? null;
+  const petMood: CanvasPetMood = sidebarBusy ? (aiAnimationRef.current !== null ? "writing" : "thinking") : solution ? "ready" : "idle";
   const visiblePageIndex = solution ? draftPageIndex : activePageIndex;
   const visiblePages = solution?.pages ?? canvasPagesRef.current;
   const visibleElements = solution ? solution.pages[draftPageIndex].elements as SceneElement[] : elements;
-
-  useEffect(() => {
-    const chat = chatScrollRef.current;
-    if (chat) chat.scrollTop = chat.scrollHeight;
-  }, [activeChat?.messages, sidebarOpen]);
 
   useEffect(() => () => { photoRequestRef.current += 1; }, []);
 
@@ -1449,7 +1450,7 @@ export function KonvaDrawingCanvas({
       const availableHeight = Math.max(1, workspace.clientHeight - 88);
       const pageScale = Math.min(1, availableWidth / PAGE_WIDTH, availableHeight / PAGE_HEIGHT);
       if (pageScale > 0) {
-        setStageSize({
+        setFitSize({
           width: Math.max(1, Math.floor(PAGE_WIDTH * pageScale)),
           height: Math.max(1, Math.floor(PAGE_HEIGHT * pageScale)),
         });
@@ -1862,7 +1863,8 @@ export function KonvaDrawingCanvas({
       let lastStep = -1;
       const animate = (now: number) => {
         if (controller.signal.aborted) return;
-        const elapsed = now - started;
+        // A frame timestamp can precede performance.now() recorded earlier in that frame.
+        const elapsed = Math.max(0, now - started);
         const step = Math.min(pieces.length - 1, Math.floor(elapsed / duration));
         const progress = Math.min(1, (elapsed - step * duration) / (duration * 0.82));
         setInkProgress({ step, progress });
@@ -2626,16 +2628,18 @@ export function KonvaDrawingCanvas({
         {!sidebarOpen && (
           <button
             aria-label={text.openAi}
-            className="absolute right-4 top-1/2 z-20 flex h-11 -translate-y-1/2 items-center gap-2 rounded-xl border border-[#dfe3e8] bg-white px-3 text-sm font-medium text-[#2563eb] shadow-sm transition-colors hover:bg-[#eff6ff]"
+            className={companion.launcher}
             onClick={() => setSidebarOpen(true)}
             title={text.openAi}
             type="button"
           >
-            <Sparkles aria-hidden="true" size={18} strokeWidth={2} />
-            <span>{text.ai}</span>
+            <CanvasPet mood={petMood} />
+            <span>{text.petName}</span>
           </button>
         )}
 
+        <div ref={viewportRef} className="absolute inset-x-0 bottom-0 top-[72px] overflow-auto overscroll-contain" style={{ scrollbarGutter: "stable" }} data-canvas-zoom={zoom}>
+        <div className="relative flex min-h-full min-w-full justify-center pb-4" style={{ width: stageSize.width + 48, height: stageSize.height + 16 }}>
         <div
           aria-label="A4 canvas"
           className="keep-white relative flex-none overflow-hidden rounded-[3px] bg-white shadow-[0_4px_24px_rgba(17,24,39,0.08)] ring-1 ring-[#dfe3e8]"
@@ -2834,58 +2838,68 @@ export function KonvaDrawingCanvas({
             </div>
           )}
         </div>
+        </div>
+        </div>
       </section>
 
       {sidebarOpen && (
         <aside
           aria-label={text.ai}
-          className="relative flex min-w-[320px] shrink-0 flex-col border-l border-[#dfe3e8] bg-white"
+          className={companion.sidebar}
           style={{ width: sidebarWidth }}
         >
-
           <div
             aria-label={text.resizeSidebar}
-            className="absolute -left-1 top-0 z-30 h-full w-2 cursor-col-resize touch-none"
+            aria-orientation="vertical"
+            aria-valuemin={320}
+            aria-valuemax={720}
+            aria-valuenow={sidebarWidth}
+            className={companion.resizeHandle}
             onPointerDown={beginSidebarResize}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+              event.preventDefault();
+              setSidebarWidth((width) => Math.max(320, Math.min(720, width + (event.key === "ArrowLeft" ? 20 : -20))));
+            }}
             role="separator"
+            tabIndex={0}
             title={text.resizeSidebar}
           />
-          <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#dfe3e8] px-4 text-[#697386]">
-            <div className="flex items-center gap-2 text-sm font-semibold text-[#111827]">
-              <Sparkles aria-hidden="true" className="text-[#2563eb]" size={18} strokeWidth={2} />
-              {text.ai}
-            </div>
+          <div className={companion.header}>
             <div className="flex items-center gap-1">
+              <CanvasAiSettings label={text.sidebarSettings}>
+                <CanvasHandwriting model={handwriting} language={language} disabled={canvasAiBusy || photoLoading || saveState === "saving"}
+                  snapshots={(solution ? solution.pieces.map(piece => piece.element) : visibleElements)
+                    .flatMap(element => element.kind === "image" && element.handwriting ? [element.handwriting] : [])}
+                  historyState={solutionHistory?.state}
+                  onUndo={() => void changeSolutionHistory("undo")} onRedo={() => void changeSolutionHistory("redo")} />
+              </CanvasAiSettings>
               <button
                 aria-label={text.newChat}
                 disabled={canvasAiBusy}
-                className="grid size-9 place-items-center rounded-lg hover:bg-[#eef0f3]"
+                className={companion.iconButton}
                 onClick={createNewChat}
                 title={text.newChat}
                 type="button"
               >
-                <MessageSquarePlus aria-hidden="true" size={18} strokeWidth={2} />
+                <MessageSquarePlus aria-hidden="true" size={16} strokeWidth={1.7} />
               </button>
               <button
                 aria-label={text.closeAi}
-                className="grid size-9 place-items-center rounded-lg hover:bg-[#eef0f3]"
+                className={companion.iconButton}
                 onClick={() => setSidebarOpen(false)}
                 title={text.close}
                 type="button"
               >
-                <X aria-hidden="true" size={18} strokeWidth={2} />
+                <X aria-hidden="true" size={17} strokeWidth={1.7} />
               </button>
             </div>
           </div>
-          <div aria-label={text.chats} className="flex shrink-0 gap-1 overflow-x-auto border-b border-[#dfe3e8] p-2">
+          <div aria-label={text.chats} className={companion.chats}>
             {aiChats.map((chat) => (
               <button
                 aria-pressed={chat.id === activeChatId}
-                className={`h-8 max-w-36 shrink-0 truncate rounded-lg px-3 text-xs transition-colors ${
-                  chat.id === activeChatId
-                    ? "bg-[#eff6ff] text-[#2563eb]"
-                    : "text-[#697386] hover:bg-[#eef0f3]"
-                }`}
+                className={companion.chatTab}
                 key={chat.id}
                 disabled={canvasAiBusy && chat.id !== activeChatId}
                 onClick={() => setActiveChatId(chat.id)}
@@ -2895,80 +2909,33 @@ export function KonvaDrawingCanvas({
               </button>
             ))}
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5" ref={chatScrollRef}>
-            {!activeChat?.messages.length && loadingChatId !== activeChatId && (
-              <div className="max-w-[280px] text-sm leading-6 text-[#697386]">{text.emptyChat}</div>
-            )}
-            <div className="flex flex-col gap-6">
-              {activeChat?.messages.map((message) =>
-                message.role === "user" ? (
-                  <div className="flex justify-end" key={message.id}>
-                    <div className="max-w-[88%] overflow-hidden rounded-[22px] bg-[#334155] text-sm leading-6 text-white">
-                      {message.image_data_url && (
-                        // The authenticated chat API returns a private data URL, so Next Image cannot optimize it.
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          alt={text.selectedArea}
-                          className="max-h-64 w-full bg-white object-contain"
-                          src={message.image_data_url}
-                        />
-                      )}
-                      <div className="px-4 py-2.5">{message.content}</div>
-                    </div>
-                  </div>
-                ) : (
-                  <article className="ai-markdown text-[15px] leading-7 text-[#111827]" key={message.id}>
-                    <div className="whitespace-pre-wrap">{message.content}</div>
-                    {message.content && (
-                      <div className="mt-2 flex items-center gap-1 text-[#697386]">
-                        <button aria-label={text.copyResponse} onClick={() => void navigator.clipboard.writeText(message.content).catch(() => {})} className="grid size-7 place-items-center rounded-md hover:bg-[#eef0f3]" title={text.copyResponse} type="button">
-                          <Copy aria-hidden="true" size={15} strokeWidth={2} />
-                        </button>
-
-                      </div>
-                    )}
-                  </article>
-                ),
-              )}
-              {sidebarBusy && loadingChatId === activeChatId && (
-                <div aria-label={text.processing} className="flex h-7 items-center gap-1.5">
-                  <span className="size-1.5 animate-pulse rounded-full bg-[#2563eb]" />
-                  <span className="size-1.5 animate-pulse rounded-full bg-[#2563eb] [animation-delay:120ms]" />
-                  <span className="size-1.5 animate-pulse rounded-full bg-[#2563eb] [animation-delay:240ms]" />
-                </div>
-              )}
-            </div>
-          </div>
-          <CanvasHandwriting model={handwriting} language={language} disabled={canvasAiBusy || photoLoading || saveState === "saving"}
-            snapshots={(solution ? solution.pieces.map(piece => piece.element) : visibleElements)
-              .flatMap(element => element.kind === "image" && element.handwriting ? [element.handwriting] : [])}
-            historyState={solutionHistory?.state}
-            onUndo={() => void changeSolutionHistory("undo")} onRedo={() => void changeSolutionHistory("redo")} />
+          <CanvasConversation messages={activeChat?.messages ?? []} chatId={activeChatId} labels={text} mood={petMood}
+            pending={sidebarBusy && loadingChatId === activeChatId && aiAnimationRef.current === null} />
           {(solution || sidebarBusy) && (
-            <div className="mx-3 mb-3 rounded-xl border border-[#dfe3e8] bg-[#eff6ff] p-3" aria-live="polite">
-              <div className="flex items-center gap-2 text-sm font-medium text-[#2563eb]">
-                <PenLine size={17} />
+            <div className={companion.draft} aria-live="polite">
+              <div className={companion.draftStatus}>
+                {sidebarBusy ? <PenLine aria-hidden="true" size={14} /> : <Check aria-hidden="true" size={14} />}
                 {sidebarBusy ? (aiAnimationRef.current !== null ? text.writing : text.thinking) : text.draftTitle}
               </div>
-              {solution && !sidebarBusy && <p className="mt-1 text-xs leading-5 text-[#697386]">{text.draftHint}</p>}
-              <div className="mt-3 flex gap-2">
+              {solution && !sidebarBusy && <p className={companion.draftHint}>{text.draftHint}</p>}
+              <div className={companion.draftActions}>
                 {solution && !sidebarBusy && (
-                  <button className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#2563eb] px-3 py-2 text-sm text-white"
-                    onClick={() => void acceptCanvasSolution()} type="button"><Check size={16} />{text.acceptDraft}</button>
+                  <button className={companion.accept}
+                    onClick={() => void acceptCanvasSolution()} type="button"><Check aria-hidden="true" size={14} />{text.acceptDraft}</button>
                 )}
-                <button className="rounded-lg border border-[#dfe3e8] bg-white px-3 py-2 text-sm text-[#334155]"
+                <button className={companion.discard}
                   onClick={stopCanvasAi} type="button">{sidebarBusy ? text.stopAi : text.discardDraft}</button>
               </div>
             </div>
           )}
           {aiError && (
-            <div className="mx-3 mb-3 rounded-lg border border-red-200 p-3 text-sm text-red-600" role="alert">
+            <div className={companion.error} role="alert">
               {aiError}
-              {saveState === "error" && <button className="mt-2 block underline" onClick={() => void queueCanvasSave().then((saved) => { if (saved) setAiError(null); })} type="button">{text.retrySave}</button>}
+              {saveState === "error" && <button onClick={() => void queueCanvasSave().then((saved) => { if (saved) setAiError(null); })} type="button">{text.retrySave}</button>}
             </div>
           )}
           <form
-            className="flex shrink-0 flex-col gap-2 border-t border-[#dfe3e8] p-3"
+            className={companion.composer}
             onSubmit={(event) => {
               event.preventDefault();
               submitAiDraft();
@@ -2993,22 +2960,22 @@ export function KonvaDrawingCanvas({
                 </button>
               </div>
             )}
-            <div className="flex gap-2">
+            <div className={companion.inputRow}>
               <input
                 aria-label={text.inputPlaceholder}
-                className="min-w-0 flex-1 rounded-xl border border-[#dfe3e8] bg-white px-3 py-2.5 text-sm text-[#111827] placeholder:text-[#697386] focus:border-[#2563eb] focus:outline-none"
+                className={companion.input}
                 onChange={(event) => setAiDraft(event.target.value)}
                 placeholder={solution ? text.revisePlaceholder : text.inputPlaceholder}
                 value={aiDraft}
               />
               <button
                 aria-label={text.sendMessage}
-                className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#2563eb] text-white disabled:cursor-not-allowed disabled:opacity-45"
+                className={companion.send}
                 disabled={sidebarBusy || !aiDraft.trim()}
                 title={text.sendMessage}
                 type="submit"
               >
-                <SendHorizontal aria-hidden="true" size={18} strokeWidth={2} />
+                <SendHorizontal aria-hidden="true" size={16} strokeWidth={1.8} />
               </button>
             </div>
           </form>

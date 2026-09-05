@@ -1,5 +1,7 @@
 export const CANVAS_AI_TEXT = {
   ru: {
+    sidebarSettings: "Настройки ИИ",
+    petName: "Помощник", petGreeting: "Давай разберёмся вместе",
     ai1Aria: "Решить на канвасе", ai1Title: "Решить на канвасе",
     ai2Aria: "Обсудить выделение", ai2Title: "Добавить задачу в чат",
     emptyChat: "Выделите задачу на листе или напишите её здесь. Решение появится на канвасе, а пояснения — в чате.",
@@ -17,6 +19,8 @@ export const CANVAS_AI_TEXT = {
     retrySave: "Повторить сохранение",
   },
   en: {
+    sidebarSettings: "AI settings",
+    petName: "Companion", petGreeting: "Let’s work it out together",
     ai1Aria: "Solve on canvas", ai1Title: "Solve on canvas",
     ai2Aria: "Discuss selection", ai2Title: "Add task to chat",
     emptyChat: "Select a problem on the page or type it here. The solution appears on the canvas, with explanations in chat.",
@@ -34,6 +38,8 @@ export const CANVAS_AI_TEXT = {
     retrySave: "Retry saving",
   },
   zh: {
+    sidebarSettings: "AI 设置",
+    petName: "小伙伴", petGreeting: "一起把题目解开吧",
     ai1Aria: "在画布上解题", ai1Title: "在画布上解题",
     ai2Aria: "讨论所选内容", ai2Title: "将题目添加到聊天",
     emptyChat: "选择画布上的题目，或在这里输入。解答将写在画布上，简短说明显示在聊天中。",

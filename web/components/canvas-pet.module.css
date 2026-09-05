@@ -1,0 +1,81 @@
+.pet {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.body {
+  transform-origin: 51px 86px;
+  animation: breathe 4.6s ease-in-out infinite;
+}
+
+.eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: blink 6.2s ease-in-out infinite;
+}
+
+.pencil {
+  opacity: 0;
+  transform-origin: 81px 70px;
+  transition: opacity 180ms ease;
+}
+
+.sparkle {
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.pet[data-mood="thinking"] .body {
+  animation: ponder 2.4s ease-in-out infinite;
+}
+
+.pet[data-mood="thinking"] .face {
+  transform: translateY(-2px);
+}
+
+.pet[data-mood="writing"] .pencil {
+  opacity: 1;
+  animation: write 700ms ease-in-out infinite;
+}
+
+.pet[data-mood="ready"] .sparkle {
+  opacity: 1;
+}
+
+.pet[data-mood="ready"] .body {
+  animation: greet 600ms ease-out, breathe 4.6s 600ms ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50% { transform: translateY(-2px) rotate(1deg); }
+}
+
+@keyframes blink {
+  0%, 43%, 47%, 100% { transform: scaleY(1); }
+  45% { transform: scaleY(.12); }
+}
+
+@keyframes ponder {
+  0%, 100% { transform: rotate(-4deg); }
+  50% { transform: translateY(-2px) rotate(3deg); }
+}
+
+@keyframes write {
+  0%, 100% { transform: rotate(-9deg); }
+  50% { transform: rotate(8deg); }
+}
+
+@keyframes greet {
+  0%, 100% { transform: translateY(0); }
+  45% { transform: translateY(-6px) rotate(-3deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pet *, .pet[data-mood] * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
