@@ -1,15 +1,16 @@
 # Handwriting dev tools
 
 - `/dev` — **Datasets** and **Writing**.
-- `/dev/dataset` — **Analysis** and **Labeling**.
-- `/dev/dataset/labeling` — persistent dataset catalog and **Add dataset**.
+- `/dev/dataset` — persistent dataset catalog, **Add dataset**, and **Labeling** /
+  **Analysis** actions on each dataset row.
 - `/dev/dataset/labeling/[id]` — human review, gallery, approval and export.
-- `/dev/dataset/analysis` — approved datasets; `/dev/dataset/analysis/[id]` computes and displays
+- `/dev/dataset/analysis/[id]` computes and displays
   **Symbol | Heatmap | Medoid**. Switch between **Centered** and **Aligned**;
   open a sample count to inspect the normalized examples.
 - `/dev/writing` — text/LaTeX input, available medoids, settings and handwriting.
-- Old `/dev/analysis`, `/dev/labeling` and their dataset links redirect to the
-  new routes. `/dev/handwriting` redirects to the labeling catalog.
+- Old catalog routes `/dev/analysis`, `/dev/labeling`, `/dev/dataset/analysis`,
+  `/dev/dataset/labeling` and `/dev/handwriting` redirect to `/dev/dataset`.
+  Old individual dataset links redirect to their current review/analysis pages.
 
 All dev UI labels and errors are English. Follow `docs/UI_DESIGN_PROMPT.md`.
 
@@ -164,7 +165,10 @@ PNG decoding and resizing use [Sharp](https://sharp.pixelplumbing.com/api-resize
 ## Writing
 
 Select an analyzed dataset, enter **Text** or **LaTeX**, and adjust **Size** and
-**Variation**. The available symbols are shown below the dataset selector.
+**Variation**. The available symbols are shown below the dataset selector, each
+with its actual medoid underneath. **Examples** inserts one of seven LaTeX presets
+(fractions, powers, trigonometry, derivative, integral, sum and multiple lines).
+Presets use the same missing-symbol checks as manually entered formulas.
 Text also has letter and line spacing under **Spacing**, and wraps to the result
 panel width. LaTeX keeps mathematical spacing and supports the installed MathJax
 base/AMS syntax, including fractions, superscripts, subscripts and aligned arrays.

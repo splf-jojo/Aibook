@@ -3,25 +3,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, FileUp, LoaderCircle } from "lucide-react";
+import { ArrowLeft, FileUp, LoaderCircle } from "lucide-react";
 import { MAX_IMPORT_BYTES } from "@/lib/handwriting-dataset";
 import { importDataset, listDatasets, type DatasetSummary } from "@/lib/handwriting-library";
 import { analysisLabels } from "@/lib/handwriting-analysis";
 import styles from "./handwriting-review.module.css";
+import library from "./handwriting-library.module.css";
 
-export function DevNavigation({ mode }: { mode: "labeling" | "analysis" }) {
+export function DevNavigation() {
   return <header className={styles.topbar}>
-    <Link href="/dev/dataset" className={styles.brand}><ArrowLeft size={17} />Datasets</Link>
-    <nav className={styles.nav} aria-label="Dev tools">
-      <Link href="/dev/dataset/labeling" aria-current={mode === "labeling" ? "page" : undefined}>Labeling</Link>
-      <Link href="/dev/dataset/analysis" aria-current={mode === "analysis" ? "page" : undefined}>Analysis</Link>
-    </nav>
+    <Link href="/dev" className={styles.brand}><ArrowLeft size={17} />Dev</Link>
+    <div className={styles.tools}><Link href="/dev/writing" className={styles.secondaryButton}>Writing</Link></div>
   </header>;
 }
 
 const statuses = { unreviewed: "Unreviewed", "in-progress": "In progress", reviewed: "Reviewed", approved: "Approved" };
 
-export function DatasetLibrary({ mode }: { mode: "labeling" | "analysis" }) {
+export function DatasetLibrary() {
   const [items, setItems] = useState<DatasetSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -35,7 +33,6 @@ export function DatasetLibrary({ mode }: { mode: "labeling" | "analysis" }) {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
-  const shown = items.filter((item) => mode === "labeling" || item.status === "approved");
 
   async function add(file: File) {
     if (locked.current) return;
@@ -50,30 +47,32 @@ export function DatasetLibrary({ mode }: { mode: "labeling" | "analysis" }) {
   }
 
   return <main className={styles.app} lang="en">
-    <DevNavigation mode={mode} />
+    <DevNavigation />
     <div className={styles.libraryContent}>
       <div className={styles.libraryHeading}>
         <h1>Datasets</h1>
-        {mode === "labeling" && <button className={styles.primaryButton} disabled={busy} onClick={() => input.current?.click()}>
+        <button className={styles.primaryButton} disabled={busy} onClick={() => input.current?.click()}>
           {busy ? <LoaderCircle className={styles.spinner} size={17} aria-label="Importing" /> : <FileUp size={17} />}Add dataset
-        </button>}
+        </button>
       </div>
       <input ref={input} type="file" accept=".json,application/json" hidden aria-label="Candidate dataset file" onChange={(event) => {
         const file = event.target.files?.[0]; event.target.value = ""; if (file) void add(file);
       }} />
       {error && <div role="alert" className={styles.error}>{error}<button className={styles.secondaryButton} onClick={() => void refresh()}>Retry</button></div>}
       {loading && <div className={styles.loading}><LoaderCircle className={styles.spinner} size={20} role="status" aria-label="Loading datasets" /></div>}
-      {!loading && !error && !shown.length && <div className={styles.emptyLibrary}>
-        <p>{mode === "analysis" ? "No approved datasets" : "No datasets"}</p>
-        {mode === "analysis" && <Link href="/dev/dataset/labeling" className={styles.secondaryButton}>Labeling<ArrowRight size={16} /></Link>}
+      {!loading && !error && !items.length && <div className={styles.emptyLibrary}>
+        <p>No datasets</p>
       </div>}
       {!loading && <div className={styles.datasetList}>
-        {shown.map((item) => <Link key={item.id} href={`/dev/dataset/${mode}/${item.id}`} className={styles.datasetRow}>
+        {items.map((item) => <div key={item.id} className={`${styles.datasetRow} ${library.row}`}>
           <div><span className={styles.datasetTitle}>{item.name}</span>
-            <span className={styles.datasetMeta}>{mode === "analysis" ? `${item.exportable} samples · ${analysisLabels[item.analysisStatus]}`
-              : `${statuses[item.status]} · ${item.total - item.pending} / ${item.total} reviewed`}</span>
-          </div><ArrowRight size={18} aria-hidden="true" />
-        </Link>)}
+            <span className={styles.datasetMeta}>{statuses[item.status]} · {item.total - item.pending} / {item.total} reviewed · {analysisLabels[item.analysisStatus]}</span>
+          </div>
+          <nav className={library.actions} aria-label={`${item.name} actions`}>
+            <Link href={`/dev/dataset/labeling/${item.id}`} className={styles.secondaryButton}>Labeling</Link>
+            <Link href={`/dev/dataset/analysis/${item.id}`} className={styles.secondaryButton}>Analysis</Link>
+          </nav>
+        </div>)}
       </div>}
     </div>
   </main>;

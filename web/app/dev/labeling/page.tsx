@@ -1,2 +1,2 @@
 import { redirect } from "next/navigation";
-export default function LegacyLabeling() { redirect("/dev/dataset/labeling"); }
+export default function LegacyLabeling() { redirect("/dev/dataset"); }

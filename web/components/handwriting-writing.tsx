@@ -12,6 +12,15 @@ import styles from "./handwriting-writing.module.css";
 
 const imageSource = (svg: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 const message = (error: unknown) => error instanceof Error ? error.message : "Something went wrong. Try again.";
+const latexPresets = [
+  { name: "Simple fraction", value: String.raw`\frac{x}{e}=x` },
+  { name: "Powers and fractions", value: String.raw`\frac{x^2+1}{y}=x_1` },
+  { name: "Trigonometry", value: String.raw`\sin x+\cos y=1` },
+  { name: "Derivative", value: String.raw`\frac{dy}{dx}=2x` },
+  { name: "Integral", value: String.raw`\int_0^1 x^2\,dx=\frac{1}{3}` },
+  { name: "Sum", value: String.raw`\sum_{x=0}^{9}x=45` },
+  { name: "Multiple lines", value: String.raw`\begin{aligned}y&=x^2+1\\\frac{dy}{dx}&=2x\end{aligned}` },
+];
 
 export function HandwritingWriting() {
   const [datasets, setDatasets] = useState<DatasetSummary[]>([]), [datasetId, setDatasetId] = useState("");
@@ -89,6 +98,13 @@ export function HandwritingWriting() {
       </div>
       <textarea className={styles.input} aria-label={mode === "latex" ? "LaTeX input" : "Text input"} value={source}
         maxLength={MAX_WRITING_LENGTH} rows={3} spellCheck={false} onChange={(event) => setSource(event.target.value)} />
+      {mode === "latex" && <select className={styles.presets} aria-label="LaTeX presets" value="" onChange={(event) => {
+        const preset = latexPresets.find((item) => item.name === event.target.value);
+        if (preset) setSource(preset.value);
+      }}>
+        <option value="" disabled>Examples</option>
+        {latexPresets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name}</option>)}
+      </select>}
       <div className={styles.settings}>
         <label className={styles.dataset}><span>Dataset</span><select value={datasetId} disabled={loading || !datasets.length} onChange={(event) => setDatasetId(event.target.value)}>
           {!datasets.length && <option value="">{loading ? "Loading…" : "No datasets"}</option>}
@@ -103,7 +119,10 @@ export function HandwritingWriting() {
         <label className={styles.slider}><span>Letter spacing <output>{settings.letterSpacing} px</output></span><input aria-label="Letter spacing" type="range" min={0} max={16} value={settings.letterSpacing} onChange={(e) => setSettings((s) => ({ ...s, letterSpacing: Number(e.target.value) }))} /></label>
         <label className={styles.slider}><span>Line spacing <output>{settings.lineSpacing.toFixed(1)}</output></span><input aria-label="Line spacing" type="range" min={1.2} max={2.8} step={0.1} value={settings.lineSpacing} onChange={(e) => setSettings((s) => ({ ...s, lineSpacing: Number(e.target.value) }))} /></label>
       </div></details>}
-      {data && data.glyphs.length > 0 && <div className={styles.coverage} aria-label="Available symbols">{data.glyphs.map((glyph) => <span key={glyph.latex} title={glyph.latex}><Latex value={glyph.latex} /></span>)}</div>}
+      {data && data.glyphs.length > 0 && <div className={styles.coverage} aria-label="Available symbols">{data.glyphs.map((glyph) => <span key={glyph.latex} title={glyph.latex}>
+        <Latex value={glyph.latex} />
+        <img className={styles.medoid} src={glyph.image} width={glyph.width} height={glyph.height} alt={`${glyph.latex} medoid`} />
+      </span>)}</div>}
       {error && <div role="alert" className={shared.error}>{error}<button className={shared.secondaryButton} onClick={() => void refresh()}>Retry</button></div>}
       {unavailable && <div className={styles.notice}><span>{data.approved ? `${analysisLabels[data.status]}.` : "Dataset needs approval."}</span>
         <Link href={`/dev/dataset/${data.approved ? "analysis" : "labeling"}/${data.id}`} className={shared.secondaryButton}>{data.approved ? "Analysis" : "Review dataset"}</Link></div>}

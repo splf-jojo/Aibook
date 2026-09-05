@@ -61,7 +61,7 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
   const hasResults = data?.symbols.some((symbol) => symbol.result?.status === "complete");
   return <main className={styles.app} lang="en">
     <header className={styles.topbar}>
-      <Link href="/dev/dataset/analysis" className={styles.brand}><ArrowLeft size={17} />Datasets</Link>
+      <Link href="/dev/dataset" className={styles.brand}><ArrowLeft size={17} />Datasets</Link>
       <div className={styles.tools}><Link href="/dev" className={styles.iconButton} aria-label="Dev home" title="Dev home"><Home size={18} /></Link></div>
     </header>
     <div className={styles.libraryContent}>
