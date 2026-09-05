@@ -2,6 +2,8 @@
 
 import {
   BookOpen,
+  Folder,
+  FolderPlus,
   Languages,
   LogOut,
   Moon,
@@ -19,6 +21,7 @@ import {
   apiHeaders,
   type CanvasRecord,
   type CanvasSummary,
+  type NoteGroup,
 } from "@/lib/canvas-api";
 
 type AppLanguage = "ru" | "en" | "zh";
@@ -26,6 +29,9 @@ type AppTheme = "light" | "dark";
 
 const COPY = {
   ru: {
+    all: "Все заметки", ungrouped: "Без группы", newGroup: "Новая группа", groupName: "Название группы",
+    move: "Группа заметки", deleteGroup: "Удалить группу", confirmDeleteGroup: "Удалить группу? Заметки останутся в «Без группы».",
+    operationFailed: "Не удалось выполнить действие. Попробуйте ещё раз.",
     title: "Мои канвасы",
     create: "Создать канвас",
     empty: "Канвасов пока нет",
@@ -49,6 +55,9 @@ const COPY = {
     logout: "Выйти",
   },
   en: {
+    all: "All notes", ungrouped: "Ungrouped", newGroup: "New group", groupName: "Group name",
+    move: "Note group", deleteGroup: "Delete group", confirmDeleteGroup: "Delete this group? Notes will be kept in Ungrouped.",
+    operationFailed: "Could not complete the action. Please try again.",
     title: "My canvases",
     create: "Create canvas",
     empty: "No canvases yet",
@@ -72,6 +81,9 @@ const COPY = {
     logout: "Log out",
   },
   zh: {
+    all: "全部笔记", ungrouped: "未分组", newGroup: "新建分组", groupName: "分组名称",
+    move: "笔记分组", deleteGroup: "删除分组", confirmDeleteGroup: "删除此分组？笔记将保留在未分组中。",
+    operationFailed: "操作失败，请重试。",
     title: "我的画布",
     create: "创建画布",
     empty: "还没有画布",
@@ -121,7 +133,16 @@ export function CanvasLibrary({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [groups, setGroups] = useState<NoteGroup[]>([]);
+  const [groupFilter, setGroupFilter] = useState("all");
+  const [groupEditor, setGroupEditor] = useState<NoteGroup | "new" | null>(null);
+  const [groupName, setGroupName] = useState("");
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [actionFailed, setActionFailed] = useState(false);
   const text = COPY[language];
+  const visibleCanvases = canvases.filter((canvas) => groupFilter === "all" ||
+    (groupFilter === "ungrouped" ? !canvas.groupId : canvas.groupId === groupFilter));
+  const selectedGroup = groups.find((group) => group.id === groupFilter);
 
   const handleAuthFailure = useCallback(
     (response: Response) => {
@@ -138,12 +159,16 @@ export function CanvasLibrary({
     setLoading(true);
     setFailed(false);
     try {
-      const response = await fetch(`${API_URL}/api/canvases`, {
-        headers: apiHeaders(token),
-      });
-      if (handleAuthFailure(response)) return;
-      if (!response.ok) throw new Error("canvas-list-failed");
+      const [response, groupResponse] = await Promise.all([
+        fetch(`${API_URL}/api/canvases`, { headers: apiHeaders(token) }),
+        fetch(`${API_URL}/api/note-groups`, { headers: apiHeaders(token) }),
+      ]);
+      if (handleAuthFailure(response) || handleAuthFailure(groupResponse)) return;
+      if (!response.ok || !groupResponse.ok) throw new Error("library-list-failed");
       setCanvases((await response.json()) as CanvasSummary[]);
+      const nextGroups = await groupResponse.json() as NoteGroup[];
+      setGroups(nextGroups);
+      setGroupFilter((current) => current === "ungrouped" || nextGroups.some((group) => group.id === current) ? current : "all");
     } catch {
       setFailed(true);
     } finally {
@@ -162,7 +187,7 @@ export function CanvasLibrary({
       const response = await fetch(`${API_URL}/api/canvases`, {
         method: "POST",
         headers: apiHeaders(token, true),
-        body: JSON.stringify({ title: `${text.untitled} ${canvases.length + 1}` }),
+        body: JSON.stringify({ title: `${text.untitled} ${canvases.length + 1}`, groupId: selectedGroup?.id ?? null }),
       });
       if (handleAuthFailure(response)) return;
       if (!response.ok) throw new Error("canvas-create-failed");
@@ -242,6 +267,58 @@ export function CanvasLibrary({
     }
   };
 
+  const saveGroup = async () => {
+    const name = groupName.trim();
+    if (!name || groupBusy || !groupEditor) return;
+    setGroupBusy(true);
+    setActionFailed(false);
+    try {
+      const response = await fetch(`${API_URL}/api/note-groups${groupEditor === "new" ? "" : `/${groupEditor.id}`}`, {
+        method: groupEditor === "new" ? "POST" : "PATCH", headers: apiHeaders(token, true), body: JSON.stringify({ name }),
+      });
+      if (handleAuthFailure(response)) return;
+      if (!response.ok) throw new Error("group-save-failed");
+      const updated = await response.json() as NoteGroup;
+      setGroups((current) => current.some((group) => group.id === updated.id)
+        ? current.map((group) => group.id === updated.id ? updated : group) : [...current, updated]);
+      setGroupFilter(updated.id);
+      setGroupEditor(null);
+    } catch { setActionFailed(true); }
+    finally { setGroupBusy(false); }
+  };
+
+  const removeGroup = async (group: NoteGroup) => {
+    if (groupBusy || busyId || !window.confirm(text.confirmDeleteGroup)) return;
+    setGroupBusy(true);
+    setActionFailed(false);
+    try {
+      const response = await fetch(`${API_URL}/api/note-groups/${group.id}`, { method: "DELETE", headers: apiHeaders(token) });
+      if (handleAuthFailure(response)) return;
+      if (!response.ok) throw new Error("group-delete-failed");
+      setGroups((current) => current.filter((item) => item.id !== group.id));
+      setCanvases((current) => current.map((canvas) => canvas.groupId === group.id ? { ...canvas, groupId: null } : canvas));
+      setGroupFilter("ungrouped");
+    } catch { setActionFailed(true); }
+    finally { setGroupBusy(false); }
+  };
+
+  const moveCanvas = async (id: string, groupId: string | null) => {
+    if (busyId || groupBusy) return;
+    setBusyId(id);
+    setActionFailed(false);
+    try {
+      const response = await fetch(`${API_URL}/api/canvases/${id}`, {
+        method: "PATCH", headers: apiHeaders(token, true), body: JSON.stringify({ groupId }),
+      });
+      if (handleAuthFailure(response)) return;
+      if (!response.ok) throw new Error("canvas-move-failed");
+      const updated = await response.json() as CanvasRecord;
+      setCanvases((current) => current.map((canvas) => canvas.id === id
+        ? { ...canvas, groupId: updated.groupId, updatedAt: updated.updatedAt } : canvas));
+    } catch { setActionFailed(true); }
+    finally { setBusyId(null); }
+  };
+
   const locale = language === "zh" ? "zh-CN" : language === "en" ? "en-US" : "ru-RU";
 
   return (
@@ -272,6 +349,40 @@ export function CanvasLibrary({
           </div>
         </header>
 
+        <nav aria-label={text.move} className="mb-6 flex flex-wrap items-center gap-2">
+          {[{ id: "all", name: text.all }, { id: "ungrouped", name: text.ungrouped }, ...groups].map((group) => (
+            <button type="button" key={group.id} aria-pressed={groupFilter === group.id}
+              onClick={() => setGroupFilter(group.id)}
+              className={`flex max-w-full items-center gap-2 rounded-xl border px-4 py-2 text-sm ${groupFilter === group.id
+                ? "border-[#2563eb] bg-[#eff6ff] text-[#2563eb]" : "border-[#dfe3e8] bg-white text-[#334155]"}`}>
+              <Folder size={16} aria-hidden="true" /><span className="truncate">{group.name}</span>
+            </button>
+          ))}
+          <button type="button" disabled={groupBusy} onClick={() => { setGroupName(""); setGroupEditor("new"); setActionFailed(false); }}
+            className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-[#2563eb] disabled:opacity-50">
+            <FolderPlus size={18} aria-hidden="true" />{text.newGroup}
+          </button>
+          {selectedGroup && <>
+            <button type="button" aria-label={text.rename} title={text.rename} disabled={groupBusy}
+              className="p-2 text-[#697386]" onClick={() => { setGroupName(selectedGroup.name); setGroupEditor(selectedGroup); setActionFailed(false); }}><Pencil size={17} /></button>
+            <button type="button" aria-label={text.deleteGroup} title={text.deleteGroup} disabled={groupBusy || busyId !== null}
+              className="p-2 text-red-500" onClick={() => void removeGroup(selectedGroup)}><Trash2 size={17} /></button>
+          </>}
+        </nav>
+
+        {groupEditor && <form className="mb-6 flex flex-wrap items-end gap-3 rounded-2xl border border-[#dfe3e8] bg-white p-4"
+          onSubmit={(event) => { event.preventDefault(); void saveGroup(); }}>
+          <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm text-[#334155]">
+            {groupEditor === "new" ? text.newGroup : text.rename}
+            <input autoFocus aria-label={text.groupName} maxLength={120} value={groupName} disabled={groupBusy}
+              onChange={(event) => setGroupName(event.target.value)}
+              className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-3 text-[#111827]" />
+          </label>
+          <button type="submit" disabled={groupBusy || !groupName.trim()} className="h-10 rounded-lg bg-[#2563eb] px-4 text-sm text-white disabled:opacity-50">{text.saveName}</button>
+          <button type="button" disabled={groupBusy} onClick={() => setGroupEditor(null)} className="h-10 px-3 text-sm text-[#697386]">{text.cancel}</button>
+        </form>}
+        {actionFailed && <p role="alert" className="mb-5 text-sm text-red-600">{text.operationFailed}</p>}
+
         {failed && (
           <button
             className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
@@ -282,7 +393,7 @@ export function CanvasLibrary({
           </button>
         )}
 
-        {!loading && canvases.length === 0 ? (
+        {!loading && visibleCanvases.length === 0 ? (
           <section className="grid min-h-[360px] place-items-center rounded-2xl border border-dashed border-[#dfe3e8] bg-white p-8 text-center">
             <div>
               <BookOpen aria-hidden="true" className="mx-auto text-[#2563eb]" size={34} />
@@ -292,7 +403,7 @@ export function CanvasLibrary({
           </section>
         ) : (
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {canvases.map((canvas) => (
+            {visibleCanvases.map((canvas) => (
               <article
                 className="rounded-2xl border border-[#dfe3e8] bg-white p-4 shadow-sm"
                 key={canvas.id}
@@ -365,6 +476,16 @@ export function CanvasLibrary({
                     </div>
                   </div>
                 )}
+                <label className="mt-4 flex items-center gap-2 border-t border-[#e5e7eb] pt-3 text-sm text-[#697386]">
+                  <Folder size={16} aria-hidden="true" />
+                  <select aria-label={`${text.move}: ${canvas.title}`} value={canvas.groupId ?? ""}
+                    disabled={busyId !== null || groupBusy}
+                    className="min-w-0 flex-1 rounded-lg bg-white p-2 text-[#334155] disabled:opacity-50"
+                    onChange={(event) => void moveCanvas(canvas.id, event.target.value || null)}>
+                    <option value="">{text.ungrouped}</option>
+                    {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                  </select>
+                </label>
               </article>
             ))}
           </section>

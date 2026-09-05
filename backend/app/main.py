@@ -22,7 +22,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -31,7 +31,7 @@ from .config import settings
 from .database import Base, SessionLocal, engine, get_session
 from .dependencies import get_current_user
 from .latex import LatexParseError, layout_latex
-from .models import AiChat, AiChatMessage, CanvasDocument, ImageTransfer, User, utc_now
+from .models import AiChat, AiChatMessage, CanvasDocument, ImageTransfer, NoteGroup, User, utc_now
 from .qwen import QwenNotConfiguredError, QwenRequestError, request_qwen, request_canvas_solution
 from .realtime import manager
 from .schemas import (
@@ -47,6 +47,8 @@ from .schemas import (
     CanvasResponse,
     CanvasSummaryResponse,
     CanvasUpdate,
+    NoteGroupWrite,
+    NoteGroupResponse,
     Credentials,
     ImageMetadata,
     LatexLayoutRequest,
@@ -164,13 +166,65 @@ async def owned_canvas(
     return canvas
 
 
+async def owned_note_group(group_id: str, user: User, session: AsyncSession, *, lock: bool = False) -> NoteGroup:
+    query = select(NoteGroup).where(NoteGroup.id == group_id, NoteGroup.user_id == user.id)
+    if lock:
+        query = query.with_for_update()
+    group = await session.scalar(query)
+    if group is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return group
+
+
+@app.get("/api/note-groups", response_model=list[NoteGroupResponse])
+async def list_note_groups(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    return list(await session.scalars(select(NoteGroup).where(NoteGroup.user_id == user.id)
+                                     .order_by(NoteGroup.created_at, NoteGroup.id)))
+
+
+@app.post("/api/note-groups", response_model=NoteGroupResponse, status_code=201)
+async def create_note_group(payload: NoteGroupWrite, user: User = Depends(get_current_user),
+                            session: AsyncSession = Depends(get_session)):
+    group = NoteGroup(user_id=user.id, name=payload.name)
+    session.add(group)
+    await session.commit()
+    await session.refresh(group)
+    return group
+
+
+@app.patch("/api/note-groups/{group_id}", response_model=NoteGroupResponse)
+async def rename_note_group(group_id: str, payload: NoteGroupWrite, user: User = Depends(get_current_user),
+                            session: AsyncSession = Depends(get_session)):
+    group = await owned_note_group(group_id, user, session, lock=True)
+    group.name = payload.name
+    group.updated_at = utc_now()
+    await session.commit()
+    await session.refresh(group)
+    return group
+
+
+@app.delete("/api/note-groups/{group_id}", status_code=204)
+async def delete_note_group(group_id: str, user: User = Depends(get_current_user),
+                            session: AsyncSession = Depends(get_session)):
+    group = await owned_note_group(group_id, user, session, lock=True)
+    await session.execute(update(CanvasDocument).where(CanvasDocument.group_id == group_id)
+                          .values(group_id=None, updated_at=utc_now()))
+    await session.delete(group)
+    await session.commit()
+    return Response(status_code=204)
+
+
 @app.get("/api/canvases", response_model=list[CanvasSummaryResponse])
 async def list_canvases(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[CanvasSummaryResponse]:
-    result = await session.scalars(
-        select(CanvasDocument)
+    # PDF source bytes are stored once in content, never loaded for the library.
+    result = await session.execute(
+        select(CanvasDocument.id, CanvasDocument.title, CanvasDocument.group_id,
+               CanvasDocument.created_at, CanvasDocument.updated_at,
+               CanvasDocument.content["pages"].label("pages"),
+               CanvasDocument.content["elements"].label("legacy_elements"))
         .where(CanvasDocument.user_id == user.id)
         .order_by(CanvasDocument.updated_at.desc())
     )
@@ -178,7 +232,9 @@ async def list_canvases(
         CanvasSummaryResponse(
             id=canvas.id,
             title=canvas.title,
-            element_count=canvas_element_count(canvas.content),
+            group_id=canvas.group_id,
+            element_count=canvas_element_count({"pages": canvas.pages} if canvas.pages is not None
+                                               else {"elements": canvas.legacy_elements or []}),
             created_at=canvas.created_at,
             updated_at=canvas.updated_at,
         )
@@ -192,9 +248,12 @@ async def create_canvas(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> CanvasDocument:
+    if payload.group_id is not None:
+        await owned_note_group(payload.group_id, user, session, lock=True)
     canvas = CanvasDocument(
         user_id=user.id,
         title=payload.title,
+        group_id=payload.group_id,
         content=payload.content.model_dump(mode="json", by_alias=True),
     )
     session.add(canvas)
@@ -220,10 +279,23 @@ async def update_canvas(
     session: AsyncSession = Depends(get_session),
 ) -> CanvasDocument:
     canvas = await owned_canvas(canvas_id, user, session)
+    if "group_id" in payload.model_fields_set:
+        if payload.group_id is not None:
+            await owned_note_group(payload.group_id, user, session, lock=True)
+        canvas.group_id = payload.group_id
     if payload.title is not None:
         canvas.title = payload.title
     if payload.content is not None:
-        canvas.content = payload.content.model_dump(mode="json", by_alias=True)
+        content = payload.content.model_dump(mode="json", by_alias=True)
+        # Older clients omit PDF fields. Do not silently erase an imported
+        # document when such a client saves ink or renames/reorders its pages.
+        if canvas.content.get("pdfData") and "pdf_data" not in payload.content.model_fields_set:
+            content["pdfData"] = canvas.content["pdfData"]
+            old_pages = {page["id"]: page for page in canvas.content.get("pages", [])}
+            for page, supplied in zip(content["pages"], payload.content.pages):
+                if "pdf_page_index" not in supplied.model_fields_set:
+                    page["pdfPageIndex"] = old_pages.get(page["id"], {}).get("pdfPageIndex")
+        canvas.content = content
     canvas.updated_at = utc_now()
     await session.commit()
     await session.refresh(canvas)

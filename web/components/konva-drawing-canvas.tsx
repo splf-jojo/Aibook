@@ -49,6 +49,7 @@ import {
 } from "react-konva";
 
 import { API_URL, apiHeaders, type CanvasRecord, type CanvasPage } from "@/lib/canvas-api";
+import { PdfPageBackground } from "@/components/pdf-page-background";
 import { findSolutionSpace } from "@/lib/solution-placement";
 import { CANVAS_AI_TEXT } from "@/lib/canvas-ai-text";
 
@@ -1276,6 +1277,7 @@ export function KonvaDrawingCanvas({
           body: JSON.stringify({
             content: {
               schemaVersion: 2,
+              pdfData: canvas.content.pdfData,
               pages: snapshotPages,
             },
           }),
@@ -1297,7 +1299,7 @@ export function KonvaDrawingCanvas({
     const queued = saveQueueRef.current.catch(() => false).then(save);
     saveQueueRef.current = queued;
     return queued;
-  }, [canvas.id, onLogout, token]);
+  }, [canvas.id, canvas.content.pdfData, onLogout, token]);
 
   useEffect(() => {
     elementsRef.current = elements;
@@ -2629,6 +2631,8 @@ export function KonvaDrawingCanvas({
             >
               <Layer listening={false} scaleX={scaleX} scaleY={scaleY}>
                 <KonvaRect fill="#ffffff" height={PAGE_HEIGHT} width={PAGE_WIDTH} />
+                <PdfPageBackground source={canvas.content.pdfData} pageIndex={visiblePages[visiblePageIndex]?.pdfPageIndex}
+                  width={PAGE_WIDTH} height={PAGE_HEIGHT} />
               </Layer>
               <Layer listening={false} ref={sceneLayerRef} scaleX={scaleX} scaleY={scaleY}>
                 {visibleElements.map((element) => {

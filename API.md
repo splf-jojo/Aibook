@@ -84,6 +84,24 @@ Responses:
 | `200` | `UserResponse` |
 | `401` | `ErrorResponse` |
 
+## Note groups and imported PDFs
+
+All group routes require the user's bearer token. Groups belong to one account, have one level and a nonblank name of up to 120 characters.
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| GET | `/api/note-groups` | — | `200` array of groups |
+| POST | `/api/note-groups` | `{ "name": "Mathematics" }` | `201` group |
+| PATCH | `/api/note-groups/{id}` | `{ "name": "Physics" }` | `200` group |
+| DELETE | `/api/note-groups/{id}` | — | `204`; notes remain ungrouped |
+
+A group has `id`, `name`, `createdAt`, `updatedAt`. Unknown or another account's IDs return `404`.
+`groupId` is nullable on canvas create, update, summary and full responses. Omitted on PATCH means unchanged; explicit `null` moves the note to Ungrouped. A non-null ID must belong to the authenticated user. Deleting a group and ungrouping its notes is one transaction; note content is unchanged.
+
+PDF import creates a new schema-2 note. Optional `content.pdfData` holds one original PDF as strict base64, at most **5,000,000 decoded bytes**. Each PDF-backed page has `pdfPageIndex` (zero-based, 0–999); blank/appended pages use null or omit it. PDF page references require `pdfData`. Notes retain the existing 1,000-page limit. iPad also rejects unreadable and encrypted PDFs before creating the note.
+
+The PDF crop box (including page rotation) is fitted proportionally and centered on each A4 canvas page. It is a background, independent of editable ink and undo. Portable PDF annotations use API page coordinates (794 × 1123); iPad converts to/from its native 720-wide page and keeps the original PencilKit archive. Both clients preserve the PDF source and page references when saving, moving or renaming notes. Library responses omit PDF content. When a pre-PDF client omits the new fields on a content save, the server preserves the source and matches existing PDF page references by page ID.
+
 ## Canvases
 
 JSON keys use `camelCase`.
@@ -386,6 +404,7 @@ Server message schema: `ImageEvent`.
 | --- | --- | --- | --- |
 | `title` | string | Yes | 1â€“120 characters |
 | `content` | `CanvasContent` | No | Default empty canvas |
+| `groupId` | string or null | No | Owned group; default ungrouped |
 
 ### `CanvasUpdate`
 
@@ -395,6 +414,7 @@ At least one non-null field is required.
 | --- | --- | --- | --- |
 | `title` | string or null | No | 1â€“120 characters |
 | `content` | `CanvasContent` or null | No | Complete content |
+| `groupId` | string or null | No | Omitted: keep group; null: ungroup |
 
 ### `CanvasSummaryResponse`
 
@@ -432,6 +452,7 @@ At least one non-null field is required.
 | `height` | number | No | `> 0`, `<= 10000`, default `1123` |
 | `pageTemplate` | string enum | No | `ruled`, `dotted`, `grid`, `plain`; default `plain` |
 | `elements` | `CanvasElement[]` | No | Maximum 20,000, default `[]` |
+| `pdfPageIndex` | integer or null | No | 0–999, index in shared PDF; null for blank pages |
 | `appleDrawingData` | string or null | No | Base64 PKDrawing cache, maximum 30,000,000 characters |
 
 `CanvasElement` is selected by `kind`:

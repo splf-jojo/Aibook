@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 import re
+import base64
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -300,6 +301,7 @@ class CanvasPage(CamelModel):
     page_template: Literal["ruled", "dotted", "grid", "plain"] = "plain"
     elements: list[CanvasElement] = Field(default_factory=list, max_length=20_000)
     apple_drawing_data: str | None = Field(default=None, max_length=30_000_000)
+    pdf_page_index: int | None = Field(default=None, ge=0, le=999)
 
 
 def new_canvas_pages() -> list[CanvasPage]:
@@ -308,11 +310,33 @@ def new_canvas_pages() -> list[CanvasPage]:
 
 class CanvasContent(CamelModel):
     schema_version: Literal[2] = 2
+    pdf_data: str | None = Field(default=None, max_length=6_666_668)
     pages: list[CanvasPage] = Field(
         default_factory=new_canvas_pages,
         min_length=1,
         max_length=1_000,
     )
+
+    @field_validator("pdf_data")
+    @classmethod
+    def validate_pdf(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            data = base64.b64decode(value, validate=True)
+        except ValueError as error:
+            raise ValueError("Invalid PDF encoding") from error
+        if len(data) > 5_000_000:
+            raise ValueError("PDF must not exceed 5 MB (5,000,000 bytes)")
+        if not data.startswith(b"%PDF-"):
+            raise ValueError("Invalid PDF file")
+        return value
+
+    @model_validator(mode="after")
+    def require_pdf_for_pages(self) -> "CanvasContent":
+        if self.pdf_data is None and any(page.pdf_page_index is not None for page in self.pages):
+            raise ValueError("PDF pages require pdfData")
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -323,6 +347,7 @@ class CanvasContent(CamelModel):
         if schema_version != 1:
             return value
         return {
+            **value,
             "schemaVersion": 2,
             "pages": [
                 {
@@ -339,15 +364,17 @@ class CanvasContent(CamelModel):
 class CanvasCreate(CamelModel):
     title: str = Field(min_length=1, max_length=120)
     content: CanvasContent = Field(default_factory=CanvasContent)
+    group_id: str | None = Field(default=None, min_length=1, max_length=36)
 
 
 class CanvasUpdate(CamelModel):
     title: str | None = Field(default=None, min_length=1, max_length=120)
     content: CanvasContent | None = None
+    group_id: str | None = Field(default=None, min_length=1, max_length=36)
 
     @model_validator(mode="after")
     def has_changes(self) -> "CanvasUpdate":
-        if self.title is None and self.content is None:
+        if self.title is None and self.content is None and "group_id" not in self.model_fields_set:
             raise ValueError("At least one field must be provided")
         return self
 
@@ -355,6 +382,7 @@ class CanvasUpdate(CamelModel):
 class CanvasSummaryResponse(CamelModel):
     id: str
     title: str
+    group_id: str | None = None
     element_count: int
     created_at: datetime
     updated_at: datetime
@@ -369,7 +397,28 @@ class CanvasResponse(CamelModel):
 
     id: str
     title: str
+    group_id: str | None = None
     content: CanvasContent
+    created_at: datetime
+    updated_at: datetime
+
+
+class NoteGroupWrite(CamelModel):
+    name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def trim_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Group name must not be blank")
+        return value
+
+
+class NoteGroupResponse(CamelModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, from_attributes=True)
+    id: str
+    name: str
     created_at: datetime
     updated_at: datetime
 

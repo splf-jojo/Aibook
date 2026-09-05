@@ -10,14 +10,17 @@ export type CanvasPage = {
   pageTemplate: PageTemplate;
   elements: unknown[];
   appleDrawingData?: string | null;
+  pdfPageIndex?: number | null;
 };
 
 export type CanvasContent = {
   schemaVersion: 2;
   pages: CanvasPage[];
+  pdfData?: string | null;
 };
 
 export type CanvasSummary = {
+  groupId?: string | null;
   id: string;
   title: string;
   elementCount: number;
@@ -26,12 +29,15 @@ export type CanvasSummary = {
 };
 
 export type CanvasRecord = {
+  groupId?: string | null;
   id: string;
   title: string;
   content: CanvasContent;
   createdAt: string;
   updatedAt: string;
 };
+
+export type NoteGroup = { id: string; name: string; createdAt: string; updatedAt: string };
 
 export function apiHeaders(
   token?: string,
