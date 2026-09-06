@@ -4,4 +4,5 @@ out/
 coverage/
 *.log
 *.tsbuildinfo
+dist/
 .env*

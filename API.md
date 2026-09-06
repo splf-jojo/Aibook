@@ -5,6 +5,7 @@
 | Environment | Base URL |
 | --- | --- |
 | Local | `http://localhost:8000` |
+| Local full stack (including handwriting) | `http://localhost` |
 | Production | `https://<api-domain>` |
 | Swagger UI | `<base-url>/docs` |
 | OpenAPI JSON | `<base-url>/openapi.json` |
@@ -21,6 +22,76 @@ Authorization: Bearer <access_token>
 ```
 
 Default token lifetime: `10080` minutes. Refresh token is not supported.
+
+`GET /api/auth/me` includes `role: "user" | "dev"`. Registration always creates
+`user`; role assignment is an explicit server command, not a profile field.
+
+## Handwriting datasets and publications
+
+The Node web service implements these routes and verifies identity with FastAPI.
+Caddy routes `/api/handwriting/*` to web **before** `/api/*` to FastAPI. Use the
+shared web origin, not port 8000. These routes are not in `/openapi.json`.
+
+| Method | Path | Access | Result |
+| --- | --- | --- | --- |
+| GET | `/api/handwriting/datasets` | Owner; dev sees all | Summaries with owner and status |
+| POST | `/api/handwriting/datasets` | Signed in | `{dataset, source?}` upload; 200 summary, including retries |
+| GET | `/api/handwriting/datasets/{id}` | Owner or dev | `{fingerprint,name,dataset,review,version}` |
+| GET | `/api/handwriting/datasets/{id}/source` | Owner or dev | Original archive/geometry or null |
+| PATCH | `/api/handwriting/datasets/{id}` | Dev | Versioned review operation |
+| GET | `/api/handwriting/datasets/{id}/analysis` | Owner or dev | Analysis, progress and publication ID |
+| POST | `/api/handwriting/datasets/{id}/analysis` | Dev | Enqueue `{expectedVersion}`; poll GET |
+| POST | `/api/handwriting/datasets/{id}/publish` | Dev | Publish current approved/analyzed `{expectedVersion}` |
+| GET | `/api/handwriting/fonts` | Signed in | Latest published version of each dataset |
+| GET | `/api/handwriting/fonts/{publicationId}` | Signed in | Immutable transparent glyphs and layout metadata |
+
+Uploads are bounded to 40 MiB and 1â€“5000 samples. PDF candidates retain schema v1.
+Native iPad exports use schema v2:
+
+```json
+{
+  "dataset": {
+    "schemaVersion": 2, "kind": "handwriting-candidates", "name": "My worksheet",
+    "samples": [{
+      "id": "r0-c0", "latex": "x",
+      "image": "data:image/png;base64,...", "context": "data:image/png;base64,...",
+      "source": {
+        "kind": "pencilkit", "file": "worksheet.pkdrawing", "sha256": "<drawing-sha256>",
+        "page": 1, "pageWidth": 595, "pageHeight": 842,
+        "box": [20, 40, 50, 50], "crossesCellBoundary": false
+      }
+    }]
+  },
+  "source": {
+    "worksheetId": "<uuid>", "configuration": {},
+    "drawing": "data:application/x-pencilkit;base64,...", "renderScale": 3,
+    "cells": [{"id": "r0-c0", "latex": "x", "page": 1, "box": [22, 42, 46, 46]}],
+    "boundaryCells": [], "outsideCellStrokes": 0
+  }
+}
+```
+
+Coordinates are unscaled page points, top-left origin, one-based page number.
+Samples contain ink without the grid or tracing guides. The original drawing
+includes every stroke; its decoded SHA-256 must match sample provenance. IDs
+include the authenticated owner and canonical candidate fingerprint. Clients
+cannot choose another owner or submit approval/publication authority. Retrying
+an upload preserves the existing review. Changing ink creates a new snapshot.
+
+Review PATCH accepts `{type:"decide",expectedVersion,sampleId,status,latex,issue?}`,
+`{type:"undo",expectedVersion}` or `{type:"approve",expectedVersion}`. Status is
+`accepted|rejected`; issue is `incorrect-outline|incorrect-symbol`. Publication
+requires current approval and successfully analyzed real medoids (minimum three
+accepted samples per class). It exposes neither the raw archive nor review.
+Published versions remain readable after later edits.
+
+Errors are `{error:string}`: 401 requires sign-in, 403 denies a dev action,
+404 hides other owners' sources, 409 means stale review/missing approval,
+413 means oversized body. Analysis statuses include `queued`, `running`,
+`complete`, `partial`, `failed` and `not-run`. POST only queues work.
+
+`/handwriting` is the browser catalog. `/dev` uses a separate HttpOnly cookie
+with the same server role checks; see `scripts/handwriting/README.md`.
 
 ## Endpoints
 
@@ -90,17 +161,17 @@ All group routes require the user's bearer token. Groups belong to one account, 
 
 | Method | Path | Request | Response |
 | --- | --- | --- | --- |
-| GET | `/api/note-groups` | — | `200` array of groups |
+| GET | `/api/note-groups` | â€” | `200` array of groups |
 | POST | `/api/note-groups` | `{ "name": "Mathematics" }` | `201` group |
 | PATCH | `/api/note-groups/{id}` | `{ "name": "Physics" }` | `200` group |
-| DELETE | `/api/note-groups/{id}` | — | `204`; notes remain ungrouped |
+| DELETE | `/api/note-groups/{id}` | â€” | `204`; notes remain ungrouped |
 
 A group has `id`, `name`, `createdAt`, `updatedAt`. Unknown or another account's IDs return `404`.
 `groupId` is nullable on canvas create, update, summary and full responses. Omitted on PATCH means unchanged; explicit `null` moves the note to Ungrouped. A non-null ID must belong to the authenticated user. Deleting a group and ungrouping its notes is one transaction; note content is unchanged.
 
-PDF import creates a new schema-2 note. Optional `content.pdfData` holds one original PDF as strict base64, at most **5,000,000 decoded bytes**. Each PDF-backed page has `pdfPageIndex` (zero-based, 0–999); blank/appended pages use null or omit it. PDF page references require `pdfData`. Notes retain the existing 1,000-page limit. iPad also rejects unreadable and encrypted PDFs before creating the note.
+PDF import creates a new schema-2 note. Optional `content.pdfData` holds one original PDF as strict base64, at most **5,000,000 decoded bytes**. Each PDF-backed page has `pdfPageIndex` (zero-based, 0â€“999); blank/appended pages use null or omit it. PDF page references require `pdfData`. Notes retain the existing 1,000-page limit. iPad also rejects unreadable and encrypted PDFs before creating the note.
 
-The PDF crop box (including page rotation) is fitted proportionally and centered on each A4 canvas page. It is a background, independent of editable ink and undo. Portable PDF annotations use API page coordinates (794 × 1123); iPad converts to/from its native 720-wide page and keeps the original PencilKit archive. Both clients preserve the PDF source and page references when saving, moving or renaming notes. Library responses omit PDF content. When a pre-PDF client omits the new fields on a content save, the server preserves the source and matches existing PDF page references by page ID.
+The PDF crop box (including page rotation) is fitted proportionally and centered on each A4 canvas page. It is a background, independent of editable ink and undo. Portable PDF annotations use API page coordinates (794 Ã— 1123); iPad converts to/from its native 720-wide page and keeps the original PencilKit archive. Both clients preserve the PDF source and page references when saving, moving or renaming notes. Library responses omit PDF content. When a pre-PDF client omits the new fields on a content save, the server preserves the source and matches existing PDF page references by page ID.
 
 ## Canvases
 
@@ -452,7 +523,7 @@ At least one non-null field is required.
 | `height` | number | No | `> 0`, `<= 10000`, default `1123` |
 | `pageTemplate` | string enum | No | `ruled`, `dotted`, `grid`, `plain`; default `plain` |
 | `elements` | `CanvasElement[]` | No | Maximum 20,000, default `[]` |
-| `pdfPageIndex` | integer or null | No | 0–999, index in shared PDF; null for blank pages |
+| `pdfPageIndex` | integer or null | No | 0â€“999, index in shared PDF; null for blank pages |
 | `appleDrawingData` | string or null | No | Base64 PKDrawing cache, maximum 30,000,000 characters |
 
 `CanvasElement` is selected by `kind`:

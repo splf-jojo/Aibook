@@ -6,6 +6,8 @@
 	encode zstd gzip
 
 	route {
+		@handwriting path /api/handwriting/*
+		reverse_proxy @handwriting web:3000
 		@backend path /api/* /health /openapi.json /docs /docs/* /redoc /redoc/* /ws /ws/*
 		reverse_proxy @backend api:8000
 		reverse_proxy web:3000

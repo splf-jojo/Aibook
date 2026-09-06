@@ -1,281 +1,164 @@
-import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
 import katex from "katex";
-import {
-  approveDataset, datasetFingerprint, datasetStats, decide, exportDataset, freshReview, MIN_EXAMPLES,
-  parseDataset, undoDecision, type CandidateDataset, type Decision, type Review,
-} from "./handwriting-dataset.ts";
+import { pool, transaction, hash, storeBlobs, restoreBlobs } from "./handwriting-db.server.ts";
+import { LibraryError } from "./handwriting-errors.ts";
+import type { Identity } from "./handwriting-access.server.ts";
+import { approveDataset, datasetFingerprint, datasetStats, decide, freshReview, parseDataset, undoDecision, type CandidateDataset, type Decision, type Review } from "./handwriting-dataset.ts";
+import { ANALYSIS_SETTINGS } from "./handwriting-analysis.ts";
+import type { AnalysisRecord } from "./handwriting-analysis.ts";
 import type { AnalysisPreview, DatasetSummary, LibrarySession, ReviewUpdate } from "./handwriting-library.ts";
-import { ANALYSIS_SETTINGS, type AnalysisRecord, type AnalysisStatus } from "./handwriting-analysis.ts";
+import type { WritingDataset } from "./handwriting-writing.ts";
+export { LibraryError } from "./handwriting-errors.ts";
 
-export class LibraryError extends Error {
-  status: number;
-  constructor(message: string, status = 400) { super(message); this.status = status; }
-}
-
-type State = { schemaVersion: 1; summary: DatasetSummary; version: number; review: Review };
-// User data is mounted at runtime and must never be traced into the application image.
-const root = () => path.resolve(/* turbopackIgnore: true */ process.env.HANDWRITING_DATA_DIR ?? "../data/handwriting/datasets");
-const isId = (id: string) => /^[a-f0-9]{64}$/.test(id);
-function directory(id: string) {
-  if (!isId(id)) throw new LibraryError("Dataset not found.", 404);
-  return path.join(/* turbopackIgnore: true */ root(), id);
-}
-function record(input: unknown): Record<string, unknown> {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new LibraryError("Invalid dataset format.");
-  return input as Record<string, unknown>;
-}
-function date(input: unknown): string {
-  if (typeof input !== "string" || !Number.isFinite(Date.parse(input))) throw new LibraryError("Invalid review date.");
-  return input;
+export function requireDev(actor: Identity) {
+  if (actor.role !== "dev") throw new LibraryError("A dev account is required.", 403);
 }
 function validLatex(value: string) {
   try { katex.renderToString(value, { throwOnError: true, trust: false, strict: "error", maxExpand: 100, maxSize: 5 }); }
   catch { throw new LibraryError("Invalid LaTeX. Correct the label before continuing."); }
 }
-function candidates(input: unknown) {
-  let result: CandidateDataset;
-  try { result = parseDataset(input); } catch (error) { throw new LibraryError((error as Error).message); }
-  for (const item of result.samples) validLatex(item.latex);
-  return result;
+function record(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new LibraryError("Invalid dataset format.");
+  return input as Record<string, unknown>;
 }
-function summary(id: string, name: string, dataset: CandidateDataset, review: Review, createdAt: string): DatasetSummary {
+export function datasetSummary(id: string, name: string, dataset: CandidateDataset, review: Review, createdAt: string): DatasetSummary {
   const stats = datasetStats(dataset, review);
   return { id, name, createdAt, updatedAt: new Date().toISOString(), total: dataset.samples.length,
     accepted: stats.accepted, rejected: stats.rejected, pending: stats.pending, exportable: stats.exportable,
     status: review.approvedAt ? "approved" : !stats.pending ? "reviewed" : stats.pending === dataset.samples.length ? "unreviewed" : "in-progress",
     analysisStatus: "not-run" };
 }
-async function readState(id: string): Promise<State> {
-  try { return JSON.parse(await readFile(path.join(directory(id), "state.json"), "utf8")); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new LibraryError("Dataset not found.", 404);
-    throw error;
-  }
-}
-async function atomicState(id: string, state: State) {
-  await atomicJson(directory(id), "state.json", state);
-}
-async function atomicJson(dir: string, filename: string, value: unknown) {
-  const temporary = path.join(dir, `.write-${randomUUID()}.tmp`);
-  try {
-    const handle = await open(temporary, "wx");
-    try { await handle.writeFile(JSON.stringify(value)); await handle.sync(); } finally { await handle.close(); }
-    await rename(temporary, path.join(dir, filename));
-  } finally { await rm(temporary, { force: true }); }
+export async function datasetRow(id: string, actor: Identity) {
+  if (!/^[a-f0-9]{64}$/.test(id)) throw new LibraryError("Dataset not found.", 404);
+  const { rows } = await pool.query("SELECT d.*,u.username AS owner_name FROM handwriting_datasets d JOIN users u ON u.id=d.owner_id WHERE d.id=$1 AND ($2='dev' OR d.owner_id=$3)", [id, actor.role, actor.id]);
+  if (!rows[0]) throw new LibraryError("Dataset not found.", 404);
+  return rows[0];
 }
 
-/** Original exports omit rejected crops, so restore against their exact candidate pack. */
-async function restoreApproved(input: unknown, source: unknown): Promise<{ dataset: CandidateDataset; review: Review }> {
-  const raw = record(input), dataset = candidates(source);
-  if (raw.schemaVersion !== 1 || raw.kind !== "handwriting-reviewed-dataset" || raw.minimumExamples !== MIN_EXAMPLES
-    || raw.representation !== "pdf-crops" || raw.coordinateSystem !== "pdf-points-top-left"
-    || raw.sourceFingerprint !== await datasetFingerprint(dataset) || !Array.isArray(raw.decisions)
-    || !Number.isSafeInteger(raw.reviewRevision) || Number(raw.reviewRevision) < 0) {
-    throw new LibraryError("The approved file does not match its source candidates.");
+/** Each export is an immutable source snapshot; retries are scoped to its owner. */
+export async function createDataset(input: unknown, actor: Identity, source?: unknown): Promise<DatasetSummary> {
+  let dataset: CandidateDataset;
+  try { dataset = parseDataset(input); } catch (error) { throw new LibraryError((error as Error).message); }
+  for (const sample of dataset.samples) validLatex(sample.latex);
+  if (dataset.schemaVersion === 2) {
+    const archive = record(source);
+    if (typeof archive.drawing !== "string" || !/^data:application\/x-pencilkit;base64,[A-Za-z0-9+/]+={0,2}$/.test(archive.drawing)
+      || typeof archive.worksheetId !== "string" || archive.worksheetId.length > 100
+      || typeof archive.configuration !== "object" || !archive.configuration || !Array.isArray(archive.cells)
+      || archive.cells.length > 10000 || !Number.isFinite(archive.renderScale) || Number(archive.renderScale) <= 0) throw new LibraryError("Missing PencilKit archive or worksheet geometry.");
+    const digest = hash(Buffer.from(archive.drawing.split(",")[1], "base64"));
+    if (dataset.samples.some(sample => sample.source.sha256 !== digest)) throw new LibraryError("The samples do not match the PencilKit archive.");
   }
-  const ids = new Set(dataset.samples.map((sample) => sample.id));
-  const decisions: Record<string, Decision> = {};
-  for (const value of raw.decisions) {
-    const item = record(value);
-    if (typeof item.id !== "string" || !ids.has(item.id) || decisions[item.id]
-      || !["accepted", "rejected"].includes(String(item.status)) || typeof item.latex !== "string"
-      || !item.latex.trim() || item.latex.length > 80 || /[\u0000-\u001f]/.test(item.latex)
-      || (item.issue !== undefined && (item.status !== "rejected" || !["incorrect-outline", "incorrect-symbol"].includes(String(item.issue))))) {
-      throw new LibraryError("Invalid review decisions.");
-    }
-    validLatex(item.latex);
-    decisions[item.id] = { status: item.status as Decision["status"], latex: item.latex,
-      reviewedAt: date(item.reviewedAt), ...(item.issue ? { issue: item.issue as Decision["issue"] } : {}) };
-  }
-  if (Object.keys(decisions).length !== ids.size) throw new LibraryError("The review is missing candidate decisions.");
-  const review: Review = { decisions, history: [], revision: Number(raw.reviewRevision),
-    inspectedRevision: Number(raw.reviewRevision), approvedAt: date(raw.approvedAt) };
-  let expected;
-  try { expected = exportDataset({ dataset, fingerprint: String(raw.sourceFingerprint), review }); }
-  catch (error) { throw new LibraryError((error as Error).message); }
-  const exported = candidates({ ...raw, kind: "handwriting-candidates" });
-  const actualSamples = new Map(exported.samples.map((sample) => [sample.id, sample]));
-  const rawSamples = new Map((raw.samples as unknown[]).map((value) => { const item = record(value); return [item.id, item]; }));
-  if (expected.samples.length !== exported.samples.length || expected.samples.some(({ reviewedAt, ...sample }) =>
-    JSON.stringify(actualSamples.get(sample.id)) !== JSON.stringify(sample) || rawSamples.get(sample.id)?.reviewedAt !== reviewedAt)
-    || JSON.stringify(raw.excludedSymbols) !== JSON.stringify(expected.excludedSymbols)) {
-    throw new LibraryError("The approved samples do not match the saved decisions.");
-  }
-  return { dataset, review };
+  const fingerprint = await datasetFingerprint(dataset), id = hash(`${actor.id}:${fingerprint}`), review = freshReview();
+  return transaction(async client => {
+    const summary = datasetSummary(id, dataset.name, dataset, review, new Date().toISOString());
+    // Reserve the identity first; conflict never overwrites review, assets or source.
+    const inserted = await client.query("INSERT INTO handwriting_datasets(id,owner_id,fingerprint,name,candidates,review,summary) VALUES($1,$2,$3,$4,'{}',$5,$6) ON CONFLICT(owner_id,fingerprint) DO NOTHING RETURNING id", [id, actor.id, fingerprint, dataset.name, review, summary]);
+    if (!inserted.rowCount) return (await client.query("SELECT summary FROM handwriting_datasets WHERE owner_id=$1 AND fingerprint=$2", [actor.id, fingerprint])).rows[0].summary;
+    const candidates = await storeBlobs(client, id, dataset);
+    const original = source ? await storeBlobs(client, id, source) : null;
+    await client.query("UPDATE handwriting_datasets SET candidates=$2,source=$3 WHERE id=$1", [id, candidates, original]);
+    return summary;
+  });
 }
 
-export async function createDataset(input: unknown, options: { sourceCandidates?: unknown; name?: string } = {}): Promise<DatasetSummary> {
-  const raw = record(input);
-  const restored = raw.kind === "handwriting-reviewed-dataset"
-    ? await restoreApproved(input, options.sourceCandidates)
-    : { dataset: candidates(input), review: freshReview() };
-  const { dataset, review } = restored;
-  const id = await datasetFingerprint(dataset);
-  const name = (options.name ?? dataset.name).trim();
-  if (!name || name.length > 160 || /[\u0000-\u001f]/.test(name)) throw new LibraryError("Invalid dataset name.");
-  await mkdir(root(), { recursive: true });
-  try { return (await readState(id)).summary; } catch (error) { if (!(error instanceof LibraryError && error.status === 404)) throw error; }
-  const state: State = { schemaVersion: 1, version: 0, review, summary: summary(id, name, dataset, review, new Date().toISOString()) };
-  const staging = path.join(root(), `.import-${randomUUID()}`);
-  await mkdir(staging);
-  try {
-    await writeFile(path.join(staging, "candidates.json"), JSON.stringify(dataset), { flag: "wx" });
-    await writeFile(path.join(staging, "state.json"), JSON.stringify(state), { flag: "wx" });
-    if (raw.kind === "handwriting-reviewed-dataset") await writeFile(path.join(staging, "original-approved.json"), JSON.stringify(input), { flag: "wx" });
-    try { await rename(staging, directory(id)); }
-    catch (error) {
-      // An identical concurrent import must never replace an existing review.
-      if (["EEXIST", "ENOTEMPTY", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return (await readState(id)).summary;
-      throw error;
-    }
-  } finally {
-    if (path.dirname(staging) !== root() || !path.basename(staging).startsWith(".import-")) throw new Error("Invalid import staging path.");
-    await rm(staging, { recursive: true, force: true });
-  }
-  return state.summary;
+export async function catalog(actor: Identity): Promise<DatasetSummary[]> {
+  const { rows } = await pool.query(`SELECT d.summary, d.owner_id, u.username, j.status AS analysis_status,
+    (SELECT p.id FROM handwriting_publications p WHERE p.dataset_id=d.id AND p.source_version=d.version) AS publication_id
+    FROM handwriting_datasets d JOIN users u ON u.id=d.owner_id
+    LEFT JOIN handwriting_jobs j ON j.dataset_id=d.id AND j.source_version=d.version
+    WHERE $1='dev' OR d.owner_id=$2 ORDER BY d.created_at DESC`, [actor.role, actor.id]);
+  return rows.map(row => ({ ...row.summary, ownerId: row.owner_id, ownerName: row.username,
+    analysisStatus: row.analysis_status ?? "not-run", publicationId: row.publication_id ?? undefined }));
+}
+export async function readDataset(id: string, actor: Identity): Promise<LibrarySession> {
+  const row = await datasetRow(id, actor);
+  return { fingerprint: row.fingerprint, name: row.name, dataset: await restoreBlobs<CandidateDataset>(id, row.candidates), review: row.review, version: row.version };
+}
+export async function readSource(id: string, actor: Identity) {
+  const row = await datasetRow(id, actor);
+  return row.source ? restoreBlobs(id, row.source) : null;
 }
 
-export async function catalog(): Promise<DatasetSummary[]> {
-  await mkdir(root(), { recursive: true });
-  const entries = await readdir(/* turbopackIgnore: true */ root(), { withFileTypes: true });
-  const items = await Promise.all(entries.filter((entry) => entry.isDirectory() && isId(entry.name)).map(async (entry) => {
-    const state = await readState(entry.name);
-    return { ...state.summary, analysisStatus: (await analysisInfo(entry.name, state)).status };
-  }));
-  return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.name.localeCompare(b.name));
+export async function applyReviewAction(id: string, input: unknown, actor: Identity): Promise<ReviewUpdate> {
+  requireDev(actor);
+  const action = record(input), session = await readDataset(id, actor);
+  if (!Number.isSafeInteger(action.expectedVersion) || action.expectedVersion !== session.version) throw new LibraryError("This dataset changed in another tab. Reload before continuing.", 409);
+  let review: Review, selectedId: string | undefined;
+  if (action.type === "decide") {
+    const sample = session.dataset.samples.find(item => item.id === action.sampleId);
+    if (!sample || !["accepted", "rejected"].includes(String(action.status)) || typeof action.latex !== "string"
+      || (action.issue !== undefined && !["incorrect-outline", "incorrect-symbol"].includes(String(action.issue)))) throw new LibraryError("Invalid review decision.");
+    validLatex(action.latex);
+    try { review = decide(session.review, sample, action.status as Decision["status"], action.latex, undefined, action.issue as Decision["issue"]); }
+    catch (error) { throw new LibraryError((error as Error).message); }
+  } else if (action.type === "undo") {
+    const undone = undoDecision(session.review);
+    if (!undone) throw new LibraryError("No decision to undo.");
+    review = undone.review; selectedId = undone.id;
+  } else if (action.type === "approve") {
+    try { review = approveDataset(session.dataset, { ...session.review, inspectedRevision: session.review.revision }); }
+    catch (error) { throw new LibraryError((error as Error).message); }
+  } else throw new LibraryError("Unknown review action.");
+  const row = await datasetRow(id, actor), version = session.version + 1;
+  const summary = datasetSummary(id, session.name, session.dataset, review, row.summary.createdAt);
+  const saved = await pool.query("UPDATE handwriting_datasets SET review=$3,version=$4,summary=$5,updated_at=now() WHERE id=$1 AND version=$2 RETURNING id", [id, session.version, review, version, summary]);
+  if (!saved.rowCount) throw new LibraryError("This dataset changed in another tab. Reload before continuing.", 409);
+  return { review, version, ...(selectedId ? { selectedId } : {}) };
 }
 
-export async function readDataset(id: string): Promise<LibrarySession> {
-  const state = await readState(id);
-  const dataset = JSON.parse(await readFile(path.join(directory(id), "candidates.json"), "utf8")) as CandidateDataset;
-  return { fingerprint: id, name: state.summary.name, dataset, review: state.review, version: state.version };
-}
-
-export async function applyReviewAction(id: string, input: unknown): Promise<ReviewUpdate> {
-  const action = record(input), dir = directory(id);
-  // Exclusive creation also protects against writes from another Next.js worker.
-  let lock;
-  try { lock = await open(path.join(dir, ".review.lock"), "wx"); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new LibraryError("A save is in progress. Try again.", 409);
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new LibraryError("Dataset not found.", 404);
-    throw error;
-  }
-  try {
-    const session = await readDataset(id), previous = await readState(id);
-    if (!Number.isSafeInteger(action.expectedVersion) || action.expectedVersion !== session.version) {
-      throw new LibraryError("This dataset changed in another tab. Reload before continuing.", 409);
-    }
-    let review: Review, selectedId: string | undefined;
-    if (action.type === "decide") {
-      const sample = session.dataset.samples.find((item) => item.id === action.sampleId);
-      if (!sample || !["accepted", "rejected"].includes(String(action.status)) || typeof action.latex !== "string"
-        || (action.issue !== undefined && !["incorrect-outline", "incorrect-symbol"].includes(String(action.issue)))) {
-        throw new LibraryError("Invalid review decision.");
-      }
-      validLatex(action.latex);
-      try { review = decide(session.review, sample, action.status as Decision["status"], action.latex, undefined, action.issue as Decision["issue"]); }
-      catch (error) { throw new LibraryError((error as Error).message); }
-    } else if (action.type === "undo") {
-      const undone = undoDecision(session.review);
-      if (!undone) throw new LibraryError("No decision to undo.");
-      review = undone.review; selectedId = undone.id;
-    } else if (action.type === "approve") {
-      try { review = approveDataset(session.dataset, { ...session.review, inspectedRevision: session.review.revision }); }
-      catch (error) { throw new LibraryError((error as Error).message); }
-    } else throw new LibraryError("Unknown review action.");
-    const version = session.version + 1;
-    await atomicState(id, { ...previous, version, review,
-      summary: summary(id, session.name, session.dataset, review, previous.summary.createdAt) });
-    return { review, version, ...(selectedId ? { selectedId } : {}) };
-  } finally { await lock.close(); await rm(path.join(dir, ".review.lock"), { force: true }); }
-}
-
-export async function analysisPreview(id: string): Promise<AnalysisPreview> {
-  const state = await readState(id), approved = Boolean(state.review.approvedAt), info = await analysisInfo(id, state);
-  const preview: AnalysisPreview = { id, name: state.summary.name, sourceVersion: state.version, approved, status: info.status, symbols: [] };
-  if (!approved) return preview;
-  if (info.status === "complete" || info.status === "partial") {
-    const result = await readAnalysisRecord(id, info.key);
+export async function analysisPreview(id: string, actor: Identity): Promise<AnalysisPreview> {
+  const row = await datasetRow(id, actor);
+  const job = (await pool.query("SELECT * FROM handwriting_jobs WHERE dataset_id=$1 AND source_version=$2", [id, row.version])).rows[0];
+  const publication = (await pool.query("SELECT id FROM handwriting_publications WHERE dataset_id=$1 AND source_version=$2", [id, row.version])).rows[0];
+  const preview: AnalysisPreview = { id, name: row.name, sourceVersion: row.version, approved: Boolean(row.review.approvedAt),
+    status: job?.status ?? "not-run", symbols: [], publicationId: publication?.id,
+    ...(job?.error ? { error: job.error } : {}), ...(job?.progress ? { progress: job.progress } : {}) };
+  if (!preview.approved) return preview;
+  if (job?.result && ["complete", "partial"].includes(job.status)) {
+    const result = await restoreBlobs<AnalysisRecord>(id, job.result);
     return { ...preview, symbols: result.symbols, computedAt: result.computedAt };
   }
-  const session = await readDataset(id);
-  // A review can change while its candidate file is being loaded.
-  if (session.version !== state.version) return analysisPreview(id);
-  return { ...preview, ...(info.progress ? { progress: info.progress } : {}),
-    symbols: datasetStats(session.dataset, session.review).eligible.map((group) => ({ latex: group.latex, count: group.accepted })) };
+  const dataset = await restoreBlobs<CandidateDataset>(id, row.candidates);
+  return { ...preview, symbols: datasetStats(dataset, row.review).eligible.map(group => ({ latex: group.latex, count: group.accepted })) };
+}
+export async function runAnalysis(id: string, expectedVersion: unknown, actor: Identity): Promise<AnalysisPreview> {
+  requireDev(actor);
+  await transaction(async client => {
+    const row = (await client.query("SELECT * FROM handwriting_datasets WHERE id=$1 FOR UPDATE", [id])).rows[0];
+    if (!row) throw new LibraryError("Dataset not found.", 404);
+    if (!Number.isSafeInteger(expectedVersion) || row.version !== expectedVersion) throw new LibraryError("This dataset changed. Reload before analyzing.", 409);
+    if (!row.review.approvedAt) throw new LibraryError("Approve this dataset before analysis.", 409);
+    const key = hash(`${id}:${row.version}:${JSON.stringify(ANALYSIS_SETTINGS)}`);
+    await client.query(`INSERT INTO handwriting_jobs(id,dataset_id,source_version,status) VALUES($1,$2,$3,'queued')
+      ON CONFLICT(dataset_id,source_version) DO UPDATE SET status='queued', error=NULL, result=NULL, updated_at=now()
+      WHERE handwriting_jobs.status IN ('failed','partial')`, [key, id, row.version]);
+  });
+  return analysisPreview(id, actor);
 }
 
-type AnalysisIndex = Pick<AnalysisRecord, "key" | "sourceVersion" | "status" | "computedAt">;
-type AnalysisJob = { progress: { completed: number; total: number }; promise: Promise<void> };
-// Shared by Next route bundles in this process. A restart cannot leave a permanent running flag.
-const analysisGlobal = globalThis as typeof globalThis & { __aibookHandwritingJobs?: Map<string, AnalysisJob> };
-const analysisJobs = analysisGlobal.__aibookHandwritingJobs ??= new Map<string, AnalysisJob>();
-function analysisKey(id: string, state: Pick<State, "version" | "review">) {
-  return createHash("sha256").update(JSON.stringify({ id, version: state.version, approvedAt: state.review.approvedAt, settings: ANALYSIS_SETTINGS })).digest("hex");
+export async function publishDataset(id: string, expectedVersion: unknown, actor: Identity): Promise<DatasetSummary> {
+  requireDev(actor);
+  const preview = await analysisPreview(id, actor);
+  if (!preview.approved || preview.sourceVersion !== expectedVersion || !["complete", "partial"].includes(preview.status)) throw new LibraryError("Analyze the current approved dataset before publishing.", 409);
+  const { writingFromAnalysis } = await import("./handwriting-writing.server.ts");
+  const writing = await writingFromAnalysis(preview);
+  if (!writing.glyphs.length) throw new LibraryError("No handwriting symbols are ready.", 409);
+  return transaction(async client => {
+    const row = (await client.query("SELECT * FROM handwriting_datasets WHERE id=$1 FOR UPDATE", [id])).rows[0];
+    if (row.version !== expectedVersion || !row.review.approvedAt) throw new LibraryError("The review changed. Reload before publishing.", 409);
+    const publicationId = hash(`published:${id}:${row.version}`);
+    const summary = { ...row.summary, id: publicationId, datasetId: id, sourceVersion: row.version, analysisStatus: preview.status, publicationId };
+    const payload = await storeBlobs(client, id, { ...writing, id: publicationId });
+    await client.query("INSERT INTO handwriting_publications(id,dataset_id,source_version,published_by,payload,summary) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(dataset_id,source_version) DO NOTHING", [publicationId, id, row.version, actor.id, payload, summary]);
+    return summary;
+  });
 }
-function analysisDirectory(id: string) { return path.join(directory(id), "analysis"); }
-function jobKey(id: string, key: string) { return `${directory(id)}:${key}`; }
-async function analysisInfo(id: string, state: State): Promise<{ key: string; status: AnalysisStatus; progress?: AnalysisJob["progress"] }> {
-  const key = analysisKey(id, state), job = analysisJobs.get(jobKey(id, key));
-  if (state.review.approvedAt && job) return { key, status: "running", progress: { ...job.progress } };
-  let index: AnalysisIndex;
-  try { index = JSON.parse(await readFile(path.join(analysisDirectory(id), "index.json"), "utf8")); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { key, status: "not-run" };
-    throw error;
-  }
-  return { key, status: state.review.approvedAt && index.key === key ? index.status : "stale" };
+export async function fontCatalog(): Promise<DatasetSummary[]> {
+  // Show the latest publication of each source, while older IDs remain readable.
+  return (await pool.query("SELECT DISTINCT ON(dataset_id) summary FROM handwriting_publications ORDER BY dataset_id,source_version DESC")).rows.map(row => row.summary);
 }
-async function readAnalysisRecord(id: string, key: string): Promise<AnalysisRecord> {
-  return JSON.parse(await readFile(path.join(analysisDirectory(id), `${key}.json`), "utf8"));
-}
-
-export async function runAnalysis(id: string, expectedVersion: unknown): Promise<AnalysisPreview> {
-  const session = await readDataset(id);
-  if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== session.version) throw new LibraryError("This dataset changed. Reload before analyzing.", 409);
-  if (!session.review.approvedAt) throw new LibraryError("Approve this dataset before analysis.", 409);
-  const state = await readState(id);
-  if (state.version !== session.version) throw new LibraryError("This dataset changed. Reload before analyzing.", 409);
-  const info = await analysisInfo(id, state), key = info.key, runningKey = jobKey(id, key);
-  if (info.status === "complete") return analysisPreview(id);
-  let job = analysisJobs.get(runningKey);
-  if (!job) {
-    if (analysisJobs.size >= 2) throw new LibraryError("Another analysis is running. Try again shortly.", 409);
-    const eligible = datasetStats(session.dataset, session.review).eligible;
-    if (!eligible.length) throw new LibraryError(`At least ${MIN_EXAMPLES} accepted samples of one symbol are required.`);
-    const progress = { completed: 0, total: eligible.length };
-    const promise = Promise.resolve().then(async () => {
-      const { analyzeSymbol } = await import("./handwriting-analysis.server.ts");
-      const symbols: AnalysisRecord["symbols"] = [], deadline = Date.now() + 120_000;
-      for (const group of eligible) {
-        const samples = session.dataset.samples.filter((sample) => {
-          const decision = session.review.decisions[sample.id];
-          return decision?.status === "accepted" && decision.latex === group.latex;
-        });
-        try {
-          if (Date.now() > deadline) throw new Error("Analysis time limit reached. Try a smaller dataset.");
-          symbols.push({ latex: group.latex, count: samples.length, result: await analyzeSymbol(group.latex, samples) });
-        } catch (error) {
-          symbols.push({ latex: group.latex, count: samples.length, result: { status: "failed", error: error instanceof Error ? error.message : "Could not analyze this symbol." } });
-        }
-        progress.completed++;
-      }
-      const result: AnalysisRecord = { schemaVersion: 1, key, datasetId: id, sourceVersion: session.version,
-        approvedAt: session.review.approvedAt!, settings: ANALYSIS_SETTINGS, computedAt: new Date().toISOString(),
-        status: symbols.every((symbol) => symbol.result?.status === "complete") ? "complete" : "partial", symbols };
-      const dir = analysisDirectory(id);
-      await mkdir(dir, { recursive: true });
-      await atomicJson(dir, `${key}.json`, result);
-      // Saved results retain their source version; a concurrent review can never make them current.
-      const current = await readState(id);
-      if (current.version !== session.version) throw new LibraryError("The review changed during analysis. Approve it again, then reanalyze.", 409);
-      await atomicJson(dir, "index.json", { key, sourceVersion: session.version, status: result.status, computedAt: result.computedAt } satisfies AnalysisIndex);
-    }).finally(() => { analysisJobs.delete(runningKey); });
-    job = { progress, promise }; analysisJobs.set(runningKey, job);
-  }
-  await job.promise;
-  return analysisPreview(id);
+export async function publishedFont(id: string): Promise<WritingDataset> {
+  const row = (await pool.query("SELECT dataset_id,payload FROM handwriting_publications WHERE id=$1", [id])).rows[0];
+  if (!row) throw new LibraryError("Published handwriting not found.", 404);
+  return restoreBlobs<WritingDataset>(row.dataset_id, row.payload);
 }

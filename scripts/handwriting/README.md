@@ -14,62 +14,48 @@
 
 All dev UI labels and errors are English. Follow `docs/UI_DESIGN_PROMPT.md`.
 
-## Local run
+## Shared cloud storage and access
+
+Local Docker and ECS run the same stack. `/dev` requires an AIbook account with
+the server-side `dev` role; its username can be anything. `/handwriting` is the
+signed-in user catalog: published handwriting and the user's own exports.
+Owners and dev can read source datasets; only dev can label, approve, analyze
+or publish. Other users receive published glyphs, never private source packs.
 
 ```powershell
-$env:HANDWRITING_REVIEW_ENABLED = "1"
-docker compose --env-file .env.production -f docker-compose.production.yml up -d --build --no-deps --wait --wait-timeout 120 web
+docker compose --env-file .env.production -f docker-compose.production.yml up -d --build --wait --wait-timeout 120
+docker compose --env-file .env.production -f docker-compose.production.yml exec api python -m app.manage grant-dev USERNAME
 ```
 
-Open `http://localhost/dev`. The flag defaults to `0` in production. Pages and
-dataset JSON routes require a localhost/loopback Host and an authenticated
-AIbook account whose username is exactly `dev`. Create that account in the local
-backend before use; no default password is stored in the source. The Dev sign-in
-form uses the existing backend authentication. An existing AIbook browser login
-as `dev` can establish the Dev session automatically. Other accounts are denied.
-
-The session cookie is HttpOnly, SameSite Strict, scoped to `/dev`, and expires
-after eight hours or when the backend JWT expires, whichever comes first. Every
-dataset request revalidates its identity against `/api/auth/me`; a username in
-browser storage cannot grant access. **Sign out** is on `/dev`. Compose configures
-`INTERNAL_API_URL=http://api:8000`; outside Docker it defaults to
-`http://127.0.0.1:8000`. Mutations require same-origin JSON requests.
-This is a local developer tool, not a public,
-multi-user service. Do not expose its storage or enable it on a public proxy.
-
-Compose mounts `./data/handwriting/datasets` into the web container at
-`/app/data/handwriting/datasets`. Files survive container recreation and browser
-storage cleanup. In `next dev` started from `web/`, the same repository folder
-is used by default. `HANDWRITING_DATA_DIR` overrides the path. A Linux bind mount
-must be writable by the web container user (UID 1001).
+Create the intended account through ordinary registration before assigning its
+role. Registration never grants dev access. Do not publish `/dev` by bypassing
+authentication. `HANDWRITING_REVIEW_ENABLED=0` hides dev routes if needed; Compose
+enables them behind role checks. Dev cookies are HttpOnly, SameSite Strict,
+scoped to `/dev`, with an eight-hour maximum lifetime. Mutations require a
+same-origin JSON request. Every request revalidates the account with FastAPI.
+`INTERNAL_API_URL` is `http://api:8000` inside Docker.
 
 ## Storage and review
 
-Each dataset has its own directory identified by the SHA-256 of the canonical
-candidate pack:
+PostgreSQL stores immutable source snapshots, review decisions/history/version,
+analysis jobs and immutable publications. PNGs and original PencilKit archives
+are stored as deduplicated `bytea`; JSON uses internal references. Back up the
+PostgreSQL volume/database, not browser storage. The old filesystem directory is
+only a migration input; `HANDWRITING_DATA_DIR` is no longer a runtime setting.
 
-- `candidates.json` — immutable crops, labels and PDF provenance.
-- `state.json` — display name, review decisions, undo history, approval and version.
-- `original-approved.json` — archived imported approval, when present.
-- `analysis/index.json` — latest analysis metadata.
-- `analysis/[key].json` — computed images, measurements, settings and source version.
+Imports accept JSON up to 40 MiB and 1–5000 samples. Schema v1 preserves PDF
+provenance. Schema v2 carries `source.kind=pencilkit`, pure ink PNGs, original
+PKDrawing, worksheet configuration and cell geometry. One-based page numbers and
+`[x,y,width,height]` boxes use page points from the top left. Page/cell overshoot
+is not silently clipped. iPad groups strokes by the strongest cell intersection;
+ambiguous cell crossings are flagged for human review. Unassigned strokes remain
+in the original archive. This is cell-based collection, not OCR.
 
-The whole `data/handwriting/` tree is ignored by Git and excluded from image
-tracing. Back up this folder separately. Dataset names never become filesystem
-paths. Imports publish a complete directory atomically. Saves use a temporary
-file, flush and atomic rename; version checks and a per-dataset exclusive lock
-prevent stale tabs from overwriting decisions. A save failure leaves the current
-sample on screen with a **Reload** action. If a process is forcibly killed during
-a write, an orphan `.review.lock` may remain: stop the web service before removing
-that specific lock, then restart it. Never remove an active writer's lock.
-
-**Add dataset** accepts candidate JSON up to 40 MB, 1–5000 samples, schema version
-1, kind `handwriting-candidates`. Each sample carries `id`, `latex`, embedded PNG
-`image` and `context`, and `source` with `file`, PDF `sha256`, one-based `page`,
-`pageWidth`, `pageHeight`, and `box: [x, y, width, height]` in PDF points from the
-top left. IDs and source crops must be unique; bounds, LaTeX and PNG data URLs
-are validated. Approval claims inside a candidate file are ignored. New packs
-start unreviewed; importing an identical pack opens its existing decisions.
+Dataset IDs include the owner and canonical pack fingerprint. Retrying the same
+upload returns the existing dataset without overwriting review. Changing the
+source creates a new snapshot. Review updates use PostgreSQL compare-and-swap
+versions; stale or concurrent changes return 409. Approvals in uploaded candidate
+JSON do not grant approval.
 
 Review shortcuts: **Left** rejects, **Right** accepts, **Up** records a correct
 symbol with a wrong outline, **Down** records a correct outline with a wrong
@@ -88,10 +74,11 @@ Approved exports omit rejected crops and underrepresented symbols. Import them
 with their exact original candidate pack to preserve **all** review decisions:
 
 ```powershell
-node scripts/handwriting/import_reviewed.mjs approved.json candidates.json "Dataset name"
+node scripts/handwriting/import_reviewed.mjs approved.json candidates.json "Dataset name" dev
 ```
 
-Requires Node 24 and installed `web/node_modules`. The command verifies the
+Requires Node 24, installed `web/node_modules`, PostgreSQL environment variables
+(`PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`) and an existing dev-role owner. The command verifies the
 source fingerprint, decisions, exported samples and exclusions before writing.
 It preserves approval timestamps and archives the original export. Exports do
 not contain undo history, so imported history starts empty. Existing library
@@ -99,7 +86,7 @@ reviews are never overwritten by a repeated import. The old IndexedDB data and
 files in Downloads are not changed. The runtime store no longer uses IndexedDB;
 `handwriting-review-storage.ts` remains only as a legacy recovery helper.
 
-## Local JSON routes
+## Dev JSON routes
 
 These Next.js routes are under `/dev`, separate from the FastAPI `/api` prefix:
 
@@ -113,15 +100,28 @@ These Next.js routes are under `/dev`, separate from the FastAPI `/api` prefix:
 | GET | `/dev/datasets/[id]` | Dataset and current review |
 | PATCH | `/dev/datasets/[id]` | Versioned `decide`, `undo` or `approve` command |
 | GET | `/dev/datasets/[id]/analysis` | Current results, eligible counts or progress |
-| POST | `/dev/datasets/[id]/analysis` | Compute analysis with `{ expectedVersion }` |
+| POST | `/dev/datasets/[id]/analysis` | Enqueue analysis with `{ expectedVersion }` |
 | GET | `/dev/datasets/[id]/writing` | Current medoids as transparent PNGs |
 
 Every PATCH includes `expectedVersion`. A decide command also includes
 `sampleId`, `status`, `latex`, and optionally `issue`. Responses contain the saved
 `review` and new `version`; undo also returns `selectedId`. Stale writes return
-409. HTTP responses are not cached; valid computed results are reused from disk.
+409. HTTP responses are not cached; computed results are reused from PostgreSQL.
+`POST /dev/datasets/[id]/publish` publishes the current version with
+`{ expectedVersion }`. Public client routes and payloads are documented in `API.md`.
 
-## Analysis — phase 2
+## Analysis and publication
+
+The separate `handwriting-worker` service processes persistent jobs serially.
+PostgreSQL advisory locking prevents duplicate workers; interrupted jobs return
+to the queue after a restart. Work is bounded by per-symbol limits and a job time
+budget, with progress and failures stored in the database. The ECS image is built
+on the Windows laptop for `linux/amd64`.
+
+Analysis does not publish automatically. **Publish** creates an immutable version
+of the available real medoids. All signed-in users can use it. Later review edits
+or recomputation leave that publication unchanged; a new approved version needs
+another explicit publication. Missing symbols retain the existing font fallback.
 
 Only accepted samples grouped by their **reviewed** LaTeX label participate.
 The dataset must remain approved, and each class needs at least three examples.
@@ -155,22 +155,16 @@ pen trajectories or train a font.
 
 One invalid accepted crop fails its entire symbol group; other groups can finish.
 The page shows the affected group and a Review link, and the catalog says
-**Incomplete**. No accepted sample is silently removed. Current local limits are
+**Incomplete**. No accepted sample is silently removed. Current limits are
 64 samples per class, 60 seconds of pair comparisons per class, and a 120-second
 budget checked between groups. Oversized/unfinished groups get an explicit error.
 
-The cache key covers dataset fingerprint, review version, approval timestamp and
-all algorithm settings. Any changed/undone decision clears approval and hides
-old results; after approval, **Reanalyze** computes a new version. Results from
-earlier review versions remain on disk. Computation never writes `state.json`
-or the imported approval. Bump the algorithm version when changing computation
-or its image-processing dependency so an older cache cannot be reused.
-Concurrent requests in one web process share a promise and progress; at most two
-datasets run at once. POST waits for completion, while GET can report progress.
-A process restart drops in-memory work but retains completed results. Multiple
-processes may duplicate computation; versioned atomic files prevent partial
-publication, and readers always compare the cache key with the current review.
-This is a local process model, not a distributed job queue.
+The job key covers owner-scoped dataset ID, review version and algorithm settings.
+A changed decision clears approval and hides obsolete analysis; older jobs remain
+in PostgreSQL for audit. POST enqueues and returns promptly, GET reports progress.
+The single worker uses a database advisory lock. A restart requeues interrupted
+jobs. Updating the algorithm requires bumping its settings version. Previously
+published glyphs remain immutable and are not rebuilt by analysis.
 
 Implementation: `web/lib/handwriting-analysis.server.ts`, shared settings/types
 in `handwriting-analysis.ts`, persistence in `handwriting-store.server.ts`.
@@ -253,10 +247,9 @@ self-contained paths and no remote fonts or TeX extension loading.
 В панели ИИ шестерёнка **Settings** слева от **New chat** открывает выбор
 **Почерк**, список шрифтовых замен и отмену/возврат решения. Выбор почерка
 предлагает **Автоматически**, **Шрифт** и доступные
-датасеты. Используется локальный Dev-доступ, описанный выше: включённый
-`HANDWRITING_REVIEW_ENABLED`, localhost и аккаунт `dev`. Имеющийся вход AIbook
-может открыть Dev-сессию автоматически. Набор должен быть одобрен и иметь
-актуальный Analysis со статусом `complete` или `partial` и доступными символами.
+опубликованные наборы. Доступен обычный вход пользователя: web запрашивает
+`/api/handwriting/fonts` с JWT; Dev-сессия и localhost не требуются.
+Набор должен быть опубликован после одобрения и анализа.
 При частичном анализе используются только успешно обработанные символы.
 
 Автовыбор предпочитает готовый набор с наибольшим числом экспортируемых образцов,
@@ -264,7 +257,7 @@ self-contained paths and no remote fonts or TeX extension loading.
 для каждого холста; настройки страницы Writing не переносятся. Перед новым
 решением набор загружается заново. Если он недоступен, не готов или нет доступа,
 решение выводится шрифтом; панель сообщает причину и предлагает открыть датасеты
-или обновить список. На окружении, где Dev-маршруты отключены, выбор почерка скрыт.
+или обновить список. Отключение Dev-интерфейса не скрывает опубликованные наборы.
 
 Каждый `steps[].latex` из ответа `/api/ai/canvas` проходит математическую
 компоновку Writing. Доступные символы заменяются настоящими медоидами; дроби,
@@ -290,8 +283,8 @@ self-contained paths and no remote fonts or TeX extension loading.
 
 Реализация: `web/lib/canvas-handwriting.ts`, `canvas-handwriting-renderer.ts`,
 `canvas-solution-history.ts` и `web/components/canvas-handwriting.tsx`.
-Подключение относится к локальному web-клиенту. Оно не подключает персональный
-почерк в iPad-приложении и не выполняет деплой на ECS. PNG содержит растровый
+Подключение работает в локальном и production web через опубликованные версии.
+iPad экспортирует образцы, но пока не выводит ответы в персональном почерке. PNG содержит растровый
 результат, а не восстановленные штрихи пера.
 
 ## Подготовка вырезок

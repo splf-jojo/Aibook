@@ -65,7 +65,7 @@ curl https://app.example.com/openapi.json -o openapi.json
 
 ```bash
 docker compose --env-file .env.production -f docker-compose.production.yml logs --tail 200 web api caddy
-docker compose --env-file .env.production -f docker-compose.production.yml up -d --build --wait --wait-timeout 120
+docker compose --env-file .env.production -f docker-compose.production.yml ps
 ```
 
 ## Обновление API без сборки на ECS
@@ -125,3 +125,75 @@ docker compose --env-file .env.production -f docker-compose.production.yml exec 
 ```
 
 Файл `.env.production` нельзя добавлять в Git. Разработчику передаются базовый HTTPS URL и скачанный контракт OpenAPI; пользовательские запросы выполняются с JWT после входа.
+
+## Общий релиз web, API и почерка
+
+Local и prod используют одну Compose-конфигурацию, но разные базы и секреты.
+`handwriting-worker` берёт задания из PostgreSQL по одному; образ общий с web.
+Лимит памяти — 768 MiB, V8 — 512 MiB. Web получает PGHOST, PGDATABASE, PGUSER,
+PGPASSWORD из существующих параметров БД. Файловый bind mount для датасетов больше
+не нужен. Caddy направляет `/api/handwriting/*` в web, остальные `/api/*` — в API.
+
+Собирать на ноутбуке из чистого коммита, на ECS запускать готовые образы:
+
+```powershell
+$releaseRevision = git rev-parse HEAD
+docker build --platform linux/amd64 --build-arg REVISION=$releaseRevision -t aibook-api:$releaseRevision ./backend
+docker build --platform linux/amd64 --build-arg REVISION=$releaseRevision --build-arg NEXT_PUBLIC_API_URL= -t aibook-web:$releaseRevision ./web
+docker image save -o .runtime/release-images.tar aibook-api:$releaseRevision aibook-web:$releaseRevision
+git archive --format=tar.gz -o .runtime/release-source.tar.gz $releaseRevision
+workbench upload .runtime/release-images.tar /tmp/ -i i-j6c9ch8it9zx4eziq5pi -f
+workbench upload .runtime/release-source.tar.gz /tmp/ -i i-j6c9ch8it9zx4eziq5pi -f
+```
+
+На сервере сначала сохранить pg_dump, исходники и теги предыдущих образов в
+`/opt/aibook-backups/<release>`. Затем загрузить образы, распаковать git-архив в
+`/opt/aibook`, сохранив `.env.production`, и назначить теги `aibook-api:local` /
+`aibook-web:local`. В git-архиве нет локальных секретов и датасетов. Проверить
+SHA-256 файлов и `org.opencontainers.image.revision` у обоих образов.
+
+```bash
+cd /opt/aibook
+docker compose --env-file .env.production -f docker-compose.production.yml run --rm --no-deps migrate
+docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --no-deps --wait --wait-timeout 120 api web handwriting-worker
+docker compose --env-file .env.production -f docker-compose.production.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+Миграция `20260907_0005` добавляет роли, источники, бинарные assets, очередь и
+публикации. Заметки и аккаунты сохраняются; старые аккаунты получают роль user.
+Выбранному существующему аккаунту администратора назначить роль отдельно:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.production.yml exec -T api python -m app.manage grant-dev dev
+```
+
+Имя dev само по себе не даёт привилегий; регистрация не назначает роль.
+
+### Перенос старой библиотеки
+
+Архивировать исходный `data/handwriting/datasets`. Передать архив на сервер и
+распаковать в отдельный временный каталог. Владельцем становится указанный
+dev-аккаунт production; локальные пароли, пользователи и заметки не переносятся.
+
+```bash
+docker cp /tmp/datasets aibook-production-web-1:/tmp/legacy-datasets
+docker compose --env-file .env.production -f docker-compose.production.yml exec -T web node dist/handwriting-migrate.mjs /tmp/legacy-datasets dev
+```
+
+Импорт проверяет отпечатки и решения, сохраняет образцы, историю, одобрение и
+актуальный анализ. Повторный запуск пропускает существующие наборы. Публикация —
+отдельное действие Publish в `/dev`: перенос не публикует исходники автоматически.
+Сравнить число образцов/решений и статусы; сохранить исходный архив.
+
+### Проверка и откат
+
+Проверить `/health`, маршруты групп и чатов в `/openapi.json`, вход `/dev` с
+dev-ролью и `/handwriting` с обычным аккаунтом. Без токена запрос
+`/api/handwriting/datasets` должен вернуть 401, а не FastAPI 404. Проверять
+загрузку, изоляцию, очередь и публикацию на синтетических образцах, не одобрять
+личные данные ради теста. Версию образов проверять по Docker label.
+
+Для отката остановить worker, восстановить предыдущие исходники, Caddy и теги
+образов. Добавленные таблицы совместимы со старым приложением: не выполнять
+alembic downgrade и не удалять PostgreSQL volume. При восстановлении pg_dump
+отдельно учитывать данные, записанные после резервной копии.

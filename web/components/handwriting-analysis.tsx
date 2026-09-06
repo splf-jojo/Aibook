@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Home, LoaderCircle } from "lucide-react";
-import { loadAnalysis, startAnalysis, type AnalysisPreview } from "@/lib/handwriting-library";
+import { loadAnalysis, startAnalysis, publishDataset, type AnalysisPreview } from "@/lib/handwriting-library";
 import { analysisLabels } from "@/lib/handwriting-analysis";
 import { Latex } from "./handwriting-review";
 import styles from "./handwriting-review.module.css";
@@ -32,7 +32,7 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
     window.addEventListener("focus", visible); document.addEventListener("visibilitychange", visible);
     return () => { mounted.current = false; requestNumber.current++; window.removeEventListener("focus", visible); document.removeEventListener("visibilitychange", visible); };
   }, [refresh]);
-  const running = busy || data?.status === "running";
+  const running = busy || data?.status === "running" || data?.status === "queued";
   useEffect(() => {
     if (!running) return;
     let pending = false;
@@ -58,6 +58,13 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
       if (mounted.current && currentId.current === datasetId) setBusy(false);
     }
   }
+  async function publish() {
+    if (!data || locked.current) return;
+    locked.current = true; setBusy(true); setError("");
+    try { await publishDataset(datasetId, data.sourceVersion); await refresh(); }
+    catch (err) { setError(err instanceof Error ? err.message : "Could not publish handwriting."); }
+    finally { locked.current = false; setBusy(false); }
+  }
   const hasResults = data?.symbols.some((symbol) => symbol.result?.status === "complete");
   return <main className={styles.app} lang="en">
     <header className={styles.topbar}>
@@ -70,11 +77,15 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
       {data && <>
         <div className={styles.libraryHeading}>
           <h1>{data.name}</h1>
+          {data.approved && ["complete", "partial"].includes(data.status) && hasResults && <button className={styles.primaryButton} disabled={busy || Boolean(data.publicationId)} onClick={() => void publish()}>
+            {data.publicationId ? "Published" : "Publish"}
+          </button>}
           {data.approved && (running || data.status !== "complete") && <button className={styles.primaryButton} disabled={running} onClick={() => void analyze()}>
             {running && <LoaderCircle className={styles.spinner} size={16} />}
             {running ? "Analyzing" : data.status === "partial" ? "Retry analysis" : data.status === "stale" ? "Reanalyze" : "Analyze"}
           </button>}
         </div>
+        {data.error && <p className={styles.error} role="alert">{data.error}</p>}
         {!data.approved ? <div className={styles.emptyLibrary}>
           <p>Approve this dataset before analysis.</p><Link href={`/dev/dataset/labeling/${datasetId}`} className={styles.secondaryButton}>Review dataset</Link>
         </div> : <>

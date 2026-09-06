@@ -14,9 +14,9 @@ export async function POST(request: Request) {
     let token: string;
     if (typeof body.token === "string") token = body.token;
     else {
-      if (body.username !== "dev") return json("A dev account is required.", 403);
+      if (typeof body.username !== "string" || body.username.length < 3 || body.username.length > 64) return json("Enter your username.", 400);
       if (typeof body.password !== "string" || body.password.length < 8 || body.password.length > 128) return json("Enter your dev password.", 400);
-      const response = await authApi("login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "dev", password: body.password }) });
+      const response = await authApi("login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: body.username, password: body.password }) });
       if (response.status === 401) return json("Incorrect username or password.", 401);
       if (!response.ok) return json("Sign in is unavailable. Try again.", 503);
       const credentials = await response.json(); token = credentials.access_token;

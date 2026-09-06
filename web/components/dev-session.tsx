@@ -13,6 +13,7 @@ async function signIn(body: { token: string } | { username: string; password: st
 }
 
 export function DevLogin({ unavailable = false }: { unavailable?: boolean }) {
+  const [username, setUsername] = useState("dev");
   const router = useRouter(), [password, setPassword] = useState(""), [busy, setBusy] = useState(false);
   const [error, setError] = useState(unavailable ? "Sign in is unavailable. Try again." : ""), bridge = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -27,12 +28,12 @@ export function DevLogin({ unavailable = false }: { unavailable?: boolean }) {
     <header className={shared.topbar}><Link href="/" className={shared.brand}>AIbook</Link></header>
     <form className={styles.login} onSubmit={async (event) => {
       event.preventDefault(); if (busy) return; bridge.current?.abort(); setBusy(true); setError("");
-      try { await signIn({ username: "dev", password }); setPassword(""); router.refresh(); }
+      try { await signIn({ username, password }); setPassword(""); router.refresh(); }
       catch (err) { setError(err instanceof Error ? err.message : "Could not sign in."); }
       finally { setBusy(false); }
     }}>
       <h1>Dev</h1>
-      <label>Username<input name="username" autoComplete="username" value="dev" readOnly /></label>
+      <label>Username<input name="username" autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} required minLength={3} maxLength={64} /></label>
       <label>Password<input name="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} maxLength={128} /></label>
       {error && <p role="alert" className={styles.error}>{error}</p>}
       <button type="submit" className={shared.primaryButton} disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>

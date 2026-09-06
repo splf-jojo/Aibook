@@ -22,7 +22,7 @@ test("dev pages and APIs require a backend-verified dev session", async (t) => {
       assert.equal((await checkDevRequest(request("forged"))).status, 401);
     });
     await t.test("a valid ordinary account does not grant dev access", async () => {
-      globalThis.fetch = async () => Response.json({ id: "ordinary-id", username: "ordinary" });
+      globalThis.fetch = async () => Response.json({ id: "ordinary-id", username: "dev", role: "user" });
       const result = await checkDevRequest(request("ordinary-token"));
       assert.equal(result.status, 403);
       assert.equal(result.headers.get("cache-control"), "no-store");
@@ -35,7 +35,7 @@ test("dev pages and APIs require a backend-verified dev session", async (t) => {
         assert.equal(init.headers.Authorization, "Bearer dev-test-token");
         assert.equal(init.cache, "no-store");
         assert.equal(init.redirect, "error");
-        return Response.json({ id: "dev-id", username: "dev" });
+        return Response.json({ id: "dev-id", username: "admin", role: "dev" });
       };
       assert.equal(await checkDevRequest(request("dev-test-token")), null);
       assert.equal(calls, 1);

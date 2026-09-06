@@ -14,9 +14,10 @@ export const ANALYSIS_SETTINGS = {
   maxSamplesPerSymbol: 64,
 } as const;
 
-export type AnalysisStatus = "not-run" | "running" | "complete" | "partial" | "stale";
+export type AnalysisStatus = "not-run" | "queued" | "running" | "complete" | "partial" | "stale" | "failed";
 export const analysisLabels: Record<AnalysisStatus, string> = {
   "not-run": "Not analyzed", running: "Analyzing", complete: "Analyzed", partial: "Incomplete", stale: "Outdated",
+  queued: "Queued", failed: "Failed",
 };
 export type NormalizedSample = {
   id: string;

@@ -1,5 +1,5 @@
 import { MAX_IMPORT_BYTES } from "./handwriting-dataset.ts";
-import { LibraryError } from "./handwriting-store.server.ts";
+import { LibraryError } from "./handwriting-errors.ts";
 
 export async function readJson(request: Request, maxBytes = MAX_IMPORT_BYTES): Promise<unknown> {
   const tooLarge = maxBytes === MAX_IMPORT_BYTES ? "File is too large (40 MB maximum)." : "Request is too large.";
@@ -24,5 +24,5 @@ export function json(value: unknown) { return Response.json(value, { headers: { 
 export function failure(error: unknown) {
   if (error instanceof LibraryError) return Response.json({ error: error.message }, { status: error.status, headers: { "Cache-Control": "no-store" } });
   console.error("Handwriting library:", error instanceof Error ? error.message : "Storage error");
-  return Response.json({ error: "Could not access the dataset folder. Check storage and retry." }, { status: 500, headers: { "Cache-Control": "no-store" } });
+  return Response.json({ error: "Could not access the dataset. Try again." }, { status: 500, headers: { "Cache-Control": "no-store" } });
 }

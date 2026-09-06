@@ -8,16 +8,16 @@ import styles from "./canvas-handwriting.module.css";
 
 const text = {
   ru: { handwriting: "Почерк", auto: "Автоматически", font: "Шрифт", connect: "Подключить почерк", refresh: "Обновить",
-    signIn: "Войдите в наборы почерка. Пока используется шрифт.", unavailable: "Почерк недоступен. Используется шрифт.",
-    notReady: "Набор нужно одобрить и проанализировать. Пока используется шрифт.", missing: "Шрифтом", layout: "Часть решения выведена шрифтом.",
+    signIn: "Войдите в AIbook. Пока используется шрифт.", unavailable: "Почерк недоступен. Используется шрифт.",
+    notReady: "Готовый почерк пока не опубликован. Используется шрифт.", missing: "Шрифтом", layout: "Часть решения выведена шрифтом.",
     undo: "Отменить решение", redo: "Вернуть решение", missingChoice: "Выбранный набор недоступен" },
   en: { handwriting: "Handwriting", auto: "Automatic", font: "Font", connect: "Connect handwriting", refresh: "Refresh",
-    signIn: "Sign in to your handwriting datasets. Using font for now.", unavailable: "Handwriting is unavailable. Using font.",
-    notReady: "Approve and analyze the dataset first. Using font for now.", missing: "Font symbols", layout: "Part of the solution uses font.",
+    signIn: "Sign in to AIbook. Using font for now.", unavailable: "Handwriting is unavailable. Using font.",
+    notReady: "No published handwriting is ready. Using font for now.", missing: "Font symbols", layout: "Part of the solution uses font.",
     undo: "Undo solution", redo: "Redo solution", missingChoice: "Selected dataset unavailable" },
   zh: { handwriting: "笔迹", auto: "自动", font: "字体", connect: "连接笔迹", refresh: "刷新",
-    signIn: "请登录笔迹数据集。暂时使用字体。", unavailable: "笔迹不可用，暂时使用字体。",
-    notReady: "请先确认并分析数据集。暂时使用字体。", missing: "使用字体的符号", layout: "部分解答使用字体显示。",
+    signIn: "请登录 AIbook。暂时使用字体。", unavailable: "笔迹不可用，暂时使用字体。",
+    notReady: "尚无已发布的笔迹。暂时使用字体。", missing: "使用字体的符号", layout: "部分解答使用字体显示。",
     undo: "撤销解答", redo: "恢复解答", missingChoice: "所选数据集不可用" },
 };
 
@@ -106,7 +106,7 @@ export function CanvasHandwriting({ model, language, disabled, snapshots, histor
     </div>}
     {model.available && model.issue && model.choice !== "font" && <p role="status" className={styles.notice}>
       {model.issue === "sign-in" ? t.signIn : model.issue === "not-ready" ? t.notReady : t.unavailable}{" "}
-      <a href="/dev/dataset" target="_blank" rel="noreferrer">{t.connect}</a>{" "}
+      <a href="/handwriting" target="_blank" rel="noreferrer">{t.connect}</a>{" "}
       <button type="button" disabled={disabled || model.loading} onClick={() => void model.refresh()}>{t.refresh}</button>
     </p>}
     {missing.length > 0 && <details className={styles.notice}><summary>{t.missing}: {missing.length}</summary><p>{missing.join(" · ")}</p></details>}

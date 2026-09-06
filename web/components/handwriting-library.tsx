@@ -65,7 +65,7 @@ export function DatasetLibrary() {
       {!loading && <div className={styles.datasetList}>
         {items.map((item) => <div key={item.id} className={`${styles.datasetRow} ${library.row}`}>
           <div><span className={styles.datasetTitle}>{item.name}</span>
-            <span className={styles.datasetMeta}>{statuses[item.status]} · {item.total - item.pending} / {item.total} reviewed · {analysisLabels[item.analysisStatus]}</span>
+            <span className={styles.datasetMeta}>{item.ownerName && `${item.ownerName} · `}{statuses[item.status]} · {item.total - item.pending} / {item.total} reviewed · {item.publicationId ? "Published" : analysisLabels[item.analysisStatus]}</span>
           </div>
           <nav className={library.actions} aria-label={`${item.name} actions`}>
             <Link href={`/dev/dataset/labeling/${item.id}`} className={styles.secondaryButton}>Labeling</Link>

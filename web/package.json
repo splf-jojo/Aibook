@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
     "predev": "node scripts/prepare-pdfjs.mjs",
-    "prebuild": "node scripts/prepare-pdfjs.mjs"
+    "prebuild": "node scripts/prepare-pdfjs.mjs",
+    "build:workers": "esbuild scripts/handwriting-worker.ts scripts/handwriting-migrate.ts --bundle --platform=node --format=esm --packages=external --outdir=dist --out-extension:.js=.mjs",
+    "test:cloud": "node tests/handwriting-cloud.integration.mjs"
   },
   "dependencies": {
     "highlight.js": "^11.12.0",
@@ -20,6 +22,7 @@
     "next": "16.3.3",
     "opentype.js": "^2.0.0",
     "pdfjs-dist": "6.3.289",
+    "pg": "^8.23.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-konva": "^19.2.5",
@@ -34,8 +37,10 @@
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "^24.10.0",
     "@types/opentype.js": "^1.3.10",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "esbuild": "^0.28.2",
     "tailwindcss": "4.3.3",
     "typescript": "^5.9.3"
   }

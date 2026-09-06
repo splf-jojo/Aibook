@@ -8,6 +8,21 @@ const sample = (id, latex = "x", x = Number(id) * 20) => ({ id, latex, image, co
 const dataset = () => parseDataset({ schemaVersion: 1, kind: "handwriting-candidates", name: "Test", samples: [sample("1"), sample("2"), sample("3"), sample("4", "y")] });
 function acceptAll(data) { return data.samples.reduce((review, item) => decide(review, item, "accepted", item.latex), freshReview()); }
 
+test("native worksheet provenance retains page-local geometry and boundary flags without claiming a PDF", () => {
+  const data = dataset();
+  const native = parseDataset({ ...data, schemaVersion: 2, samples: data.samples.map(item => ({ ...item,
+    source: { ...item.source, kind: "pencilkit", crossesCellBoundary: true, page: 8, file: "worksheet.pkdrawing" } })) });
+  assert.equal(native.samples[0].source.page, 8);
+  assert.equal(native.samples[0].source.crossesCellBoundary, true);
+  assert.deepEqual(native.samples[0].source.box, data.samples[0].source.box);
+  let review = acceptAll(native);
+  review = approveDataset(native, { ...review, inspectedRevision: review.revision });
+  const result = exportDataset({ dataset: native, review, fingerprint: "native-source" });
+  assert.equal(result.representation, "pencilkit-cells");
+  assert.equal(result.coordinateSystem, "page-points-top-left");
+  assert.throws(() => parseDataset({ ...data, schemaVersion: 2 }), /PencilKit/);
+});
+
 test("new candidates remain pending even if the imported file claims they are approved", () => {
   const data = dataset();
   const imported = parseDataset({ ...data, approvedAt: "2026-01-01", samples: data.samples.map((s) => ({ ...s, status: "accepted" })) });
@@ -107,7 +122,7 @@ test("separate outline and symbol issues persist in the audit, never in accepted
 test("import rejects duplicate identities, duplicate source crops, remote images, and bad bounds", () => {
   const data = dataset();
   assert.throws(() => parseDataset({ ...data, samples: [data.samples[0], data.samples[0]] }), /ID/);
-  assert.throws(() => parseDataset({ ...data, samples: [sample("1"), sample("2", "x", 20)] }), /same PDF crop/);
+  assert.throws(() => parseDataset({ ...data, samples: [sample("1"), sample("2", "x", 20)] }), /same cell or crop/);
   assert.throws(() => parseDataset({ ...data, samples: [{ ...sample("1"), image: "https://example.com/private.png" }] }), /PNG/);
   assert.throws(() => parseDataset({ ...data, samples: [sample("1", "x", 599)] }), /page bounds/);
   assert.throws(() => parseDataset({ ...data, samples: [sample("__proto__", "x", 20)] }), /ID/);

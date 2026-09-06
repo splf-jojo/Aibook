@@ -29,6 +29,8 @@ services:
   api:
     build:
       context: ./backend
+      args:
+        REVISION: ${REVISION:-unknown}
     image: aibook-api:local
     restart: unless-stopped
     init: true
@@ -73,6 +75,7 @@ services:
     build:
       context: ./web
       args:
+        REVISION: ${REVISION:-unknown}
         NEXT_PUBLIC_API_URL: ""
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     image: aibook-web:local
@@ -81,11 +84,15 @@ services:
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
-      HANDWRITING_REVIEW_ENABLED: ${HANDWRITING_REVIEW_ENABLED:-0}
-      HANDWRITING_DATA_DIR: /app/data/handwriting/datasets
+      HANDWRITING_REVIEW_ENABLED: "1"
       INTERNAL_API_URL: http://api:8000
-    volumes:
-      - ./data/handwriting/datasets:/app/data/handwriting/datasets
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:?POSTGRES_DB is required}
+      PGUSER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     expose:
       - "3000"
     healthcheck:
@@ -108,6 +115,29 @@ services:
       - ALL
     networks:
       - edge
+      - database
+    logging: *default-logging
+
+  handwriting-worker:
+    image: aibook-web:local
+    command: ["node", "--max-old-space-size=512", "dist/handwriting-worker.mjs"]
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 150s
+    mem_limit: 768m
+    environment:
+      NODE_ENV: production
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:?POSTGRES_DB is required}
+      PGUSER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      MALLOC_ARENA_MAX: "2"
+      VIPS_CONCURRENCY: "1"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - database
     logging: *default-logging
 
   migrate:

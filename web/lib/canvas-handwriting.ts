@@ -33,27 +33,20 @@ export class HandwritingAccessError extends Error {
   constructor(status: number) { super("Handwriting is unavailable."); this.status = status; }
 }
 
-/** Reuse the existing local/dev authorization; never expose the dataset publicly. */
+/** Regular account access to immutable published handwriting; no dev session. */
 async function authorizedFetch(url: string, token: string, signal?: AbortSignal) {
-  const options = { cache: "no-store" as const, signal };
-  let result = await fetch(url, options);
-  if (result.status === 401 || result.status === 403) {
-    const login = await fetch("/dev/session", { ...options, method: "POST",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
-    if (!login.ok) throw new HandwritingAccessError(login.status);
-    result = await fetch(url, options);
-  }
+  const result = await fetch(url, { cache: "no-store", signal, headers: { Authorization: `Bearer ${token}` } });
   if (!result.ok) throw new HandwritingAccessError(result.status);
   return result;
 }
 
 export async function canvasHandwritingCatalog(token: string, signal?: AbortSignal): Promise<DatasetSummary[]> {
-  return (await authorizedFetch("/dev/datasets", token, signal)).json();
+  return (await authorizedFetch("/api/handwriting/fonts", token, signal)).json();
 }
 
 export async function canvasHandwritingDataset(id: string, token: string, signal?: AbortSignal): Promise<WritingDataset> {
   if (!/^[a-f0-9]{64}$/.test(id)) throw new HandwritingAccessError(404);
-  const dataset = await (await authorizedFetch(`/dev/datasets/${id}/writing`, token, signal)).json() as WritingDataset;
+  const dataset = await (await authorizedFetch(`/api/handwriting/fonts/${id}`, token, signal)).json() as WritingDataset;
   if (!dataset.approved || !["complete", "partial"].includes(dataset.status) || !dataset.glyphs.length) {
     throw new HandwritingAccessError(409);
   }

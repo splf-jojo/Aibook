@@ -3,6 +3,11 @@ import type { AnalysisStatus, AnalysisSymbol } from "./handwriting-analysis.ts";
 import type { WritingDataset } from "./handwriting-writing.ts";
 
 export type DatasetSummary = {
+  ownerId?: string;
+  ownerName?: string;
+  publicationId?: string;
+  datasetId?: string;
+  sourceVersion?: number;
   id: string;
   name: string;
   createdAt: string;
@@ -25,6 +30,7 @@ export type ReviewCommand =
 export type ReviewAction = ReviewCommand & { expectedVersion: number };
 export type ReviewUpdate = { review: Review; version: number; selectedId?: string };
 export type AnalysisPreview = {
+  error?: string; publicationId?: string;
   id: string; name: string; approved: boolean; sourceVersion: number; status: AnalysisStatus;
   symbols: AnalysisSymbol[]; computedAt?: string; progress?: { completed: number; total: number };
 };
@@ -43,6 +49,9 @@ export const loadWritingDataset = (id: string, signal?: AbortSignal) => fetch(`/
 export const startAnalysis = (id: string, expectedVersion: number) => fetch(`/dev/datasets/${id}/analysis`, {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedVersion }),
 }).then(response<AnalysisPreview>);
+export const publishDataset = (id: string, expectedVersion: number) => fetch(`/dev/datasets/${id}/publish`, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedVersion }),
+}).then(response<DatasetSummary>);
 export const importDataset = (dataset: unknown) => fetch("/dev/datasets", {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataset }),
 }).then(response<DatasetSummary>);

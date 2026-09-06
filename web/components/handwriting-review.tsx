@@ -111,6 +111,7 @@ function ReviewCard({ sample, decision, index, total, busy, onDecide, onUndo, ca
       <img src={sample.context} alt={`Source context, page ${sample.source.page}`}
         onLoad={() => setContextLoaded(true)} onError={() => setImageError(true)} />
       <span>{sample.source.file} · {sample.source.page}</span>
+      {sample.source.crossesCellBoundary && <span>Ink crosses the cell boundary. Check the full outline.</span>}
     </details>
   </section>;
 }

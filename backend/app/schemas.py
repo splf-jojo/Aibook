@@ -31,6 +31,7 @@ class UserResponse(BaseModel):
 
     id: str
     username: str
+    role: Literal["user", "dev"] = "user"
 
 
 class AiSidebarResponse(BaseModel):

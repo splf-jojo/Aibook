@@ -5,18 +5,20 @@ export type Candidate = {
   image: string;
   context: string;
   source: {
+    kind?: "pencilkit";
+    crossesCellBoundary?: boolean;
     file: string;
     sha256: string;
     page: number;
     pageWidth: number;
     pageHeight: number;
-    /** PDF points, top-left origin: x, y, width, height. */
+    /** Page-local points, top-left origin: x, y, width, height. */
     box: [number, number, number, number];
   };
 };
 
 export type CandidateDataset = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   kind: "handwriting-candidates";
   name: string;
   samples: Candidate[];
@@ -66,8 +68,8 @@ function png(value: unknown): string {
 
 export function parseDataset(input: unknown): CandidateDataset {
   const data = object(input);
-  if (data.schemaVersion !== 1 || data.kind !== "handwriting-candidates" || !Array.isArray(data.samples) || !data.samples.length || data.samples.length > 5000) {
-    throw new Error("Expected handwriting-candidates version 1 with 1 to 5000 samples.");
+  if (![1, 2].includes(data.schemaVersion as number) || data.kind !== "handwriting-candidates" || !Array.isArray(data.samples) || !data.samples.length || data.samples.length > 5000) {
+    throw new Error("Expected handwriting-candidates version 1 or 2 with 1 to 5000 samples.");
   }
   const ids = new Set<string>(), locations = new Set<string>();
   const samples = data.samples.map((raw): Candidate => {
@@ -75,7 +77,8 @@ export function parseDataset(input: unknown): CandidateDataset {
     const id = text(sample.id, 100);
     if (ids.has(id) || ["__proto__", "constructor", "prototype"].includes(id)) throw new Error("The dataset contains duplicate or invalid sample IDs.");
     ids.add(id);
-    if (typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Missing source PDF SHA-256.");
+    if (typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Missing source SHA-256.");
+    if (data.schemaVersion === 2 && source.kind !== "pencilkit") throw new Error("Version 2 requires PencilKit provenance.");
     if (!Number.isInteger(source.page) || Number(source.page) < 1 || Number(source.page) > 10000) throw new Error("Invalid page number.");
     const width = source.pageWidth, height = source.pageHeight, box = source.box;
     if (typeof width !== "number" || typeof height !== "number" || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0 || !Array.isArray(box) || box.length !== 4 || !box.every((v) => typeof v === "number" && Number.isFinite(v))) {
@@ -84,13 +87,15 @@ export function parseDataset(input: unknown): CandidateDataset {
     const [x, y, w, h] = box as number[];
     if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > width + 0.01 || y + h > height + 0.01) throw new Error("Sample is outside the page bounds.");
     const location = `${source.sha256}:${source.page}:${box.join(",")}`;
-    if (locations.has(location)) throw new Error("The same PDF crop appears more than once.");
+    if (locations.has(location)) throw new Error("The same cell or crop appears more than once.");
     locations.add(location);
     return { id, latex: text(sample.latex, 80), image: png(sample.image), context: png(sample.context), source: {
+      ...(data.schemaVersion === 2 ? { kind: "pencilkit" as const } : {}),
+      ...(data.schemaVersion === 2 && source.crossesCellBoundary === true ? { crossesCellBoundary: true } : {}),
       file: text(source.file, 240), sha256: source.sha256, page: Number(source.page), pageWidth: width, pageHeight: height, box: [x, y, w, h],
     } };
   });
-  return { schemaVersion: 1, kind: "handwriting-candidates", name: text(data.name, 160), samples };
+  return { schemaVersion: data.schemaVersion as 1 | 2, kind: "handwriting-candidates", name: text(data.name, 160), samples };
 }
 
 export async function datasetFingerprint(dataset: CandidateDataset): Promise<string> {
@@ -154,11 +159,12 @@ export function exportDataset(session: ReviewSession) {
   const stats = datasetStats(dataset, review);
   const eligible = new Set(stats.eligible.map((g) => g.latex));
   return {
-    schemaVersion: 1, kind: "handwriting-reviewed-dataset", name: dataset.name,
+    schemaVersion: dataset.schemaVersion, kind: "handwriting-reviewed-dataset", name: dataset.name,
     sourceFingerprint: fingerprint, approvedAt: review.approvedAt, reviewRevision: review.revision,
     minimumExamples: MIN_EXAMPLES,
     // These are reviewed PDF crops, not recovered pen trajectories or a trained font.
-    representation: "pdf-crops", coordinateSystem: "pdf-points-top-left",
+    representation: dataset.schemaVersion === 2 ? "pencilkit-cells" : "pdf-crops",
+    coordinateSystem: dataset.schemaVersion === 2 ? "page-points-top-left" : "pdf-points-top-left",
     samples: dataset.samples.flatMap((sample) => {
       const decision = review.decisions[sample.id];
       return decision?.status === "accepted" && eligible.has(decision.latex)

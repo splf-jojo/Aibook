@@ -16,23 +16,19 @@ test("auto selects the largest approved analyzed profile; an explicit unavailabl
   assert.equal(items[0].id, "draft");
 });
 
-test("protected requests establish the existing dev session and retry only after success", async t => {
+test("normal accounts fetch published fonts with their bearer token without a dev login", async t => {
   const calls = [], signal = new AbortController().signal;
-  t.mock.method(globalThis, "fetch", async (url, options) => {
-    calls.push({ url, options });
-    return calls.length === 1 ? new Response(null, { status: 401 }) : Response.json(calls.length === 2 ? {} : [ready]);
-  });
+  t.mock.method(globalThis, "fetch", async (url, options) => { calls.push({url,options}); return Response.json([ready]); });
   assert.deepEqual(await canvasHandwritingCatalog("test-token", signal), [ready]);
-  assert.deepEqual(calls.map(call => call.url), ["/dev/datasets", "/dev/session", "/dev/datasets"]);
-  assert.equal(calls[1].options.body, JSON.stringify({ token: "test-token" }));
-  assert.ok(calls.every(call => call.options.cache === "no-store" && call.options.signal === signal));
+  assert.deepEqual(calls.map(call => call.url), ["/api/handwriting/fonts"]);
+  assert.equal(calls[0].options.headers.Authorization, "Bearer test-token");
+  assert.equal(calls[0].options.signal, signal);
 });
-
-test("forbidden session does not retry or expose a profile", async t => {
+test("invalid account does not retry through a privileged session", async t => {
   let requests = 0;
-  t.mock.method(globalThis, "fetch", async () => { requests++; return new Response(null, { status: 403 }); });
+  t.mock.method(globalThis, "fetch", async () => { requests++; return new Response(null, {status:401}); });
   await assert.rejects(canvasHandwritingCatalog("test-token"), error => handwritingIssue(error) === "sign-in");
-  assert.equal(requests, 2);
+  assert.equal(requests,1);
 });
 
 test("dataset validation rejects unapproved, stale and empty packs and unsafe IDs", async t => {

@@ -328,6 +328,9 @@ export function CanvasLibrary({
         <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold text-[#111827]">{text.title}</h1>
           <div className="flex items-center gap-2">
+            <a href="/handwriting" className="flex h-11 items-center rounded-xl border border-[#dfe3e8] bg-white px-4 text-sm text-[#334155]">
+              {language === "ru" ? "Почерк" : language === "zh" ? "笔迹" : "Handwriting"}
+            </a>
             <button
               className="flex h-11 items-center gap-2 rounded-xl bg-[#2563eb] px-4 text-sm font-medium text-white disabled:opacity-50"
               disabled={creating}

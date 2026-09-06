@@ -20,8 +20,12 @@ ARG NEXT_PUBLIC_API_URL=""
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
 RUN npm run build
+RUN npm run build:workers
 
 FROM node:22-alpine AS runner
+
+ARG REVISION=unknown
+LABEL org.opencontainers.image.revision=$REVISION
 
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -36,6 +40,9 @@ RUN addgroup --system --gid 1001 nodejs \
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/dist ./dist
+# Next bundles KaTeX into routes; the standalone migration tool imports it directly.
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/katex ./node_modules/katex
 
 # The formula renderer fetches this asset at runtime; standalone does not include public.
 RUN test -s ./public/fonts/Kalam-Regular.ttf

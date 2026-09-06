@@ -47,6 +47,7 @@ def test_personal_image_delivery_and_acknowledgement() -> None:
         me = client.get("/api/auth/me", headers=auth_header(alice_token))
         assert me.status_code == 200
         assert me.json()["username"] == "alice"
+        assert me.json()["role"] == "user"
 
         with client.websocket_connect(
             "/ws", headers=auth_header(alice_token)

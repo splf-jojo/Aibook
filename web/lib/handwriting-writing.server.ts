@@ -1,10 +1,15 @@
 import sharp from "sharp";
 import { analysisPreview } from "./handwriting-store.server.ts";
 import type { WritingDataset, WritingGlyph } from "./handwriting-writing.ts";
+import type { AnalysisPreview } from "./handwriting-library.ts";
+import type { Identity } from "./handwriting-access.server.ts";
 
 /** Only current, accepted medoids are served. Analysis keeps the other images. */
-export async function writingDataset(id: string): Promise<WritingDataset> {
-  const analysis = await analysisPreview(id), glyphs: WritingGlyph[] = [];
+export async function writingDataset(id: string, actor: Identity): Promise<WritingDataset> {
+  return writingFromAnalysis(await analysisPreview(id, actor));
+}
+export async function writingFromAnalysis(analysis: AnalysisPreview): Promise<WritingDataset> {
+  const glyphs: WritingGlyph[] = [];
   for (const symbol of analysis.symbols) {
     const result = symbol.result;
     if (result?.status !== "complete") continue;
@@ -20,6 +25,6 @@ export async function writingDataset(id: string): Promise<WritingDataset> {
     const image = await sharp(rgba, { raw: { width, height, channels: 4 } }).png().toBuffer();
     glyphs.push({ latex: symbol.latex, medoidId: result.medoid.id, width, height, image: `data:image/png;base64,${image.toString("base64")}` });
   }
-  return { id, name: analysis.name, approved: analysis.approved, status: analysis.status, sourceVersion: analysis.sourceVersion,
+  return { id: analysis.id, name: analysis.name, approved: analysis.approved, status: analysis.status, sourceVersion: analysis.sourceVersion,
     ...(analysis.computedAt ? { computedAt: analysis.computedAt } : {}), glyphs };
 }
