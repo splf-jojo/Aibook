@@ -128,6 +128,29 @@ docker compose --env-file .env.production -f docker-compose.production.yml exec 
 
 ## Общий релиз web, API и почерка
 
+### Подключение с Windows через Workbench
+
+Для используемого международного аккаунта проверен Workbench CLI 1.0.1 с
+`workbench_endpoint: "ecs-workbench-intl.aliyuncs.com"` внутри активного профиля
+`%USERPROFILE%\.workbench\config.json`. Корневое одноимённое поле CLI не использует.
+Не заменять файл конфигурации шаблоном: он содержит существующие credentials.
+
+Проверенный запуск при проблеме TLS-рукопожатия этой версии CLI:
+
+```powershell
+$env:GODEBUG = "http2client=0,tlsmlkem=0,tlskyber=0"
+workbench exec -i i-j6c9ch8it9zx4eziq5pi --command "docker ps" --output json
+```
+
+Настройка среды относится к текущей PowerShell-сессии. Session Manager включён
+пользователем для всех регионов аккаунта 7 сентября; это дополнительный канал,
+а не замена правильному endpoint. Во время диагностики общий китайский endpoint
+ожидал около 15 секунд и переходил к Session Manager; международный открывал
+обычный SSH-сеанс примерно за 6–7 секунд. HTTP и контейнеры ECS при этом работали.
+Перед перезапуском ECS отличать сбой подключения CLI от недоступности сервера.
+
+### Сборка и запуск
+
 Local и prod используют одну Compose-конфигурацию, но разные базы и секреты.
 `handwriting-worker` берёт задания из PostgreSQL по одному; образ общий с web.
 Лимит памяти — 768 MiB, V8 — 512 MiB. Web получает PGHOST, PGDATABASE, PGUSER,
@@ -156,15 +179,27 @@ SHA-256 файлов и `org.opencontainers.image.revision` у обоих обр
 cd /opt/aibook
 docker compose --env-file .env.production -f docker-compose.production.yml run --rm --no-deps migrate
 docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --no-deps --wait --wait-timeout 120 api web handwriting-worker
-docker compose --env-file .env.production -f docker-compose.production.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 ```
+
+Если менялся `Caddyfile`, сравнить SHA-256 файла на хосте и внутри Caddy.
+При распаковке tar файл может получить новый inode, а bind mount работающего
+контейнера останется на старом. При несовпадении требуется пересоздать Caddy:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.production.yml up -d --no-build --no-deps --force-recreate --wait --wait-timeout 60 caddy
+```
+
+Если обе копии совпадают, достаточно `caddy reload --config /etc/caddy/Caddyfile
+--adapter caddyfile` внутри контейнера. Одна только успешная команда reload не
+доказывает, что новые правила действительно прочитаны; проверить маршруты HTTP.
 
 Миграция `20260907_0005` добавляет роли, источники, бинарные assets, очередь и
 публикации. Заметки и аккаунты сохраняются; старые аккаунты получают роль user.
-Выбранному существующему аккаунту администратора назначить роль отдельно:
+Выбранному существующему аккаунту администратора назначить роль отдельно.
+По указанию владельца проекта в production роль dev назначена аккаунту `aman`:
 
 ```bash
-docker compose --env-file .env.production -f docker-compose.production.yml exec -T api python -m app.manage grant-dev dev
+docker compose --env-file .env.production -f docker-compose.production.yml exec -T api python -m app.manage grant-dev aman
 ```
 
 Имя dev само по себе не даёт привилегий; регистрация не назначает роль.
@@ -177,7 +212,7 @@ dev-аккаунт production; локальные пароли, пользова
 
 ```bash
 docker cp /tmp/datasets aibook-production-web-1:/tmp/legacy-datasets
-docker compose --env-file .env.production -f docker-compose.production.yml exec -T web node dist/handwriting-migrate.mjs /tmp/legacy-datasets dev
+docker compose --env-file .env.production -f docker-compose.production.yml exec -T web node dist/handwriting-migrate.mjs /tmp/legacy-datasets aman
 ```
 
 Импорт проверяет отпечатки и решения, сохраняет образцы, историю, одобрение и
@@ -197,3 +232,19 @@ dev-ролью и `/handwriting` с обычным аккаунтом. Без т
 образов. Добавленные таблицы совместимы со старым приложением: не выполнять
 alembic downgrade и не удалять PostgreSQL volume. При восстановлении pg_dump
 отдельно учитывать данные, записанные после резервной копии.
+
+### Проверенный деплой 7 сентября 2026
+
+- ECS запущен на образах web/API `204ed5d8d298d108c228dfd193a32f7d3a05ac6c`,
+  собранных на Windows под linux/amd64; worker использует тот же web-образ.
+- Перед обновлением сохранены БД и исходники в
+  `/opt/aibook-backups/handwriting-204ed5d-20260907-031334`; предыдущие образы
+  отмечены `aibook-api:rollback-204ed5d` и `aibook-web:rollback-204ed5d`.
+- На `aman` перенесены 2 набора: 20 и 312 образцов, всего 316 принятых.
+  Сохранены решения и 2 завершённых анализа. Повторный импорт не создаёт дублей.
+- Проверены публичные `/health`, `/`, `/dev`, `/handwriting`, маршруты групп/
+  чатов и 401 на handwriting API без авторизации. Изолированный интеграционный
+  тест на ECS проверил загрузку, роли, владельцев, гонки, worker и неизменяемую
+  публикацию; его аккаунты и данные удалены по точным ID.
+- Реальные наборы автоматически не публиковались. Их публикация для общего
+  каталога выполняется действием Publish в `/dev`.
