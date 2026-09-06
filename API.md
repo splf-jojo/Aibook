@@ -85,13 +85,6 @@ Schema v1 PDF crops and opaque paper images are unchanged. Stored original PNG
 bytes, PencilKit archives, upload fingerprints and review versions are not
 rewritten by this derived rendering; labels are never inferred from its pixels.
 
-Native transparent PNGs are served to review and analysis as black ink with
-their original alpha mask, dimensions and coordinates. This also repairs the
-visibility of earlier dark-mode PencilKit exports (white ink on transparency).
-Schema v1 PDF crops and opaque paper images are unchanged. Stored original PNG
-bytes, PencilKit archives, upload fingerprints and review versions are not
-rewritten by this derived rendering; labels are never inferred from its pixels.
-
 Review PATCH accepts `{type:"decide",expectedVersion,sampleId,status,latex,issue?}`,
 `{type:"undo",expectedVersion}` or `{type:"approve",expectedVersion}`. Status is
 `accepted|rejected`; issue is `incorrect-outline|incorrect-symbol`. Publication
