@@ -1,5 +1,6 @@
 import katex from "katex";
 import { pool, transaction, hash, storeBlobs, restoreBlobs } from "./handwriting-db.server.ts";
+import { readCandidateDataset } from "./handwriting-candidates.server.ts";
 import { LibraryError } from "./handwriting-errors.ts";
 import type { Identity } from "./handwriting-access.server.ts";
 import { approveDataset, datasetFingerprint, datasetStats, decide, freshReview, parseDataset, undoDecision, type CandidateDataset, type Decision, type Review } from "./handwriting-dataset.ts";
@@ -72,7 +73,7 @@ export async function catalog(actor: Identity): Promise<DatasetSummary[]> {
 }
 export async function readDataset(id: string, actor: Identity): Promise<LibrarySession> {
   const row = await datasetRow(id, actor);
-  return { fingerprint: row.fingerprint, name: row.name, dataset: await restoreBlobs<CandidateDataset>(id, row.candidates), review: row.review, version: row.version };
+  return { fingerprint: row.fingerprint, name: row.name, dataset: await readCandidateDataset(id, row.candidates), review: row.review, version: row.version };
 }
 export async function readSource(id: string, actor: Identity) {
   const row = await datasetRow(id, actor);
@@ -118,7 +119,7 @@ export async function analysisPreview(id: string, actor: Identity): Promise<Anal
     const result = await restoreBlobs<AnalysisRecord>(id, job.result);
     return { ...preview, symbols: result.symbols, computedAt: result.computedAt };
   }
-  const dataset = await restoreBlobs<CandidateDataset>(id, row.candidates);
+  const dataset = await readCandidateDataset(id, row.candidates);
   return { ...preview, symbols: datasetStats(dataset, row.review).eligible.map(group => ({ latex: group.latex, count: group.accepted })) };
 }
 export async function runAnalysis(id: string, expectedVersion: unknown, actor: Identity): Promise<AnalysisPreview> {

@@ -1,8 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { pool, transaction, storeBlobs, restoreBlobs } from "../lib/handwriting-db.server.ts";
+import { pool, transaction, storeBlobs } from "../lib/handwriting-db.server.ts";
+import { readCandidateDataset } from "../lib/handwriting-candidates.server.ts";
 import { analyzeSymbol } from "../lib/handwriting-analysis.server.ts";
 import { ANALYSIS_SETTINGS, type AnalysisRecord } from "../lib/handwriting-analysis.ts";
-import { datasetStats, type CandidateDataset, type Review } from "../lib/handwriting-dataset.ts";
+import { datasetStats, type Review } from "../lib/handwriting-dataset.ts";
 
 let stopping = false;
 process.on("SIGTERM", () => { stopping = true; });
@@ -28,7 +29,7 @@ while (!stopping) {
   try {
     const row = (await pool.query("SELECT * FROM handwriting_datasets WHERE id=$1", [job.dataset_id])).rows[0];
     if (!row || row.version !== job.source_version || !row.review.approvedAt) throw new Error("The review changed. Approve it again, then reanalyze.");
-    const dataset = await restoreBlobs<CandidateDataset>(row.id, row.candidates), review = row.review as Review;
+    const dataset = await readCandidateDataset(row.id, row.candidates), review = row.review as Review;
     const groups = datasetStats(dataset, review).eligible, symbols: AnalysisRecord["symbols"] = [], deadline = Date.now() + 120000;
     if (!groups.length) throw new Error("No symbols have enough accepted samples.");
     let completed = 0;

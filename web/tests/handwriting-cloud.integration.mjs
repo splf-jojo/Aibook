@@ -98,7 +98,46 @@ try {
   await call(alice, "datasets", "POST", { dataset: native, source: { ...source, drawing: source.drawing + "AA" } }, 400);
   const stored = (await pool.query("SELECT candidates,source FROM handwriting_datasets WHERE id=$1", [nativeResult.id])).rows[0];
   assert.ok(!JSON.stringify(stored).includes("base64,"), "Images and original strokes must be bytea, not JSON Base64");
-  console.log("PASS: account isolation, dev role, idempotent native/PDF upload, binary storage, concurrent review, persistent analysis, partial failures, publication and immutable font versions.");
+  assert.equal((await call(alice, `datasets/${nativeResult.id}`)).dataset.samples[0].image, image, "Opaque paper must not be treated as an ink mask");
+
+  // Regression: PencilKit rendered black strokes as white in the app's dark theme.
+  const whitePixels = Buffer.alloc(64 * 64 * 4, 255);
+  for (let p = 0; p < pixels.length; p++) whitePixels[p * 4 + 3] = 255 - pixels[p];
+  const whitePng = await sharp(whitePixels, { raw: { width: 64, height: 64, channels: 4 } }).png().toBuffer();
+  const whiteImage = `data:image/png;base64,${whitePng.toString("base64")}`;
+  const darkNative = { ...native, name: "Dark-mode native fixture", samples: data.samples.slice(0, 3).map(sample => ({
+    ...sample, image: whiteImage, context: whiteImage, source: { ...sample.source, kind: "pencilkit", sha256: native.samples[0].source.sha256 },
+  })) };
+  const darkId = (await call(alice, "datasets", "POST", { dataset: darkNative, source })).id;
+  const darkRead = await call(alice, `datasets/${darkId}`);
+  assert.deepEqual(darkRead.dataset.samples.map(sample => [sample.id, sample.latex, sample.source]), darkNative.samples.map(sample => [sample.id, sample.latex, sample.source]));
+  const visible = await sharp(Buffer.from(darkRead.dataset.samples[0].image.split(",")[1], "base64")).ensureAlpha().raw().toBuffer();
+  for (let p = 0; p < whitePixels.length; p += 4) {
+    assert.equal(visible[p + 3], whitePixels[p + 3]);
+    if (visible[p + 3]) assert.deepEqual([...visible.subarray(p, p + 3)], [0, 0, 0]);
+  }
+  let nativeVersion = 0;
+  for (const sample of darkNative.samples) nativeVersion = (await call(dev, `datasets/${darkId}`, "PATCH", {
+    type: "decide", expectedVersion: nativeVersion, sampleId: sample.id, status: "accepted", latex: sample.latex,
+  })).version;
+  assert.equal((await call(alice, "datasets", "POST", { dataset: darkNative, source })).id, darkId);
+  assert.equal((await call(alice, `datasets/${darkId}`)).version, nativeVersion, "Reading corrected images and retrying upload must preserve review");
+  nativeVersion = (await call(dev, `datasets/${darkId}`, "PATCH", { type: "approve", expectedVersion: nativeVersion })).version;
+  await call(dev, `datasets/${darkId}/analysis`, "POST", { expectedVersion: nativeVersion });
+  let nativeAnalysis;
+  for (let tries = 0; tries < 90; tries++) {
+    nativeAnalysis = await call(dev, `datasets/${darkId}/analysis`);
+    if (!["running", "queued"].includes(nativeAnalysis.status)) break;
+    await delay(1000);
+  }
+  assert.equal(nativeAnalysis.status, "complete", "Worker must analyze the same visible ink as review");
+  const nativePublication = await call(dev, `datasets/${darkId}/publish`, "POST", { expectedVersion: nativeVersion });
+  assert.equal((await call(bob, `fonts/${nativePublication.id}`)).glyphs.length, 1);
+  const originalPng = (await pool.query("SELECT data FROM handwriting_assets WHERE dataset_id=$1 AND sha256=$2", [darkId, createHash("sha256").update(whitePng).digest("hex")])).rows[0].data;
+  assert.deepEqual(originalPng, whitePng, "Original white PNG remains byte-for-byte intact");
+  assert.deepEqual(await call(alice, `datasets/${darkId}/source`), source, "PencilKit archive is immutable");
+  assert.equal((await call(alice, `datasets/${darkId}`)).fingerprint, darkRead.fingerprint);
+  console.log("PASS: account isolation, dev role, idempotent native/PDF upload, binary storage, concurrent review, persistent analysis, partial failures, immutable publications, and dark-mode native review/analysis with original PNG/PencilKit preservation.");
 } finally {
   const ids = accounts.map(account => account.id);
   if (ids.length) {
