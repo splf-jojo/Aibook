@@ -45,6 +45,17 @@ try {
   assert.equal(id, duplicate.id);
   const bobCopy = await call(bob, "datasets", "POST", { dataset: data });
   assert.notEqual(id, bobCopy.id, "Same source from different owners must have separate reviews");
+  await call(bob, `datasets/${bobCopy.id}`, "PATCH", { type: "accept-all", expectedVersion: 0 }, 403);
+  await call(dev, `datasets/${bobCopy.id}`, "PATCH", { type: "decide", expectedVersion: 0, sampleId: "s0", status: "rejected", latex: "q", issue: "incorrect-outline" });
+  const bulk = await call(dev, `datasets/${bobCopy.id}`, "PATCH", { type: "accept-all", expectedVersion: 1 });
+  assert.equal(bulk.version, 2);
+  assert.equal(Object.values(bulk.review.decisions).filter(item => item.status === "accepted").length, 7);
+  assert.equal(bulk.review.decisions.s0.latex, "q");
+  assert.equal(bulk.review.decisions.s0.issue, "incorrect-outline");
+  assert.equal(bulk.review.approvedAt, null);
+  await call(dev, `datasets/${bobCopy.id}`, "PATCH", { type: "accept-all", expectedVersion: 1 }, 409);
+  await call(dev, `datasets/${bobCopy.id}`, "PATCH", { type: "accept-all", expectedVersion: 2 }, 400);
+  assert.deepEqual((await call(bob, `datasets/${bobCopy.id}`)).review, bulk.review);
   for (const suffix of ["", "/source", "/analysis"]) await call(bob, `datasets/${id}${suffix}`, "GET", undefined, 404);
   assert.ok((await call(dev, "datasets")).some(item => item.id === id && item.ownerId === alice.id));
   assert.ok(!(await call(bob, "datasets")).some(item => item.id === id));

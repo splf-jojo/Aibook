@@ -1,6 +1,7 @@
 import katex from "katex";
 import { pool, transaction, hash, storeBlobs, restoreBlobs } from "./handwriting-db.server.ts";
 import { readCandidateDataset } from "./handwriting-candidates.server.ts";
+import { acceptPending } from "./handwriting-dataset.ts";
 import { LibraryError } from "./handwriting-errors.ts";
 import type { Identity } from "./handwriting-access.server.ts";
 import { approveDataset, datasetFingerprint, datasetStats, decide, freshReview, parseDataset, undoDecision, type CandidateDataset, type Decision, type Review } from "./handwriting-dataset.ts";
@@ -91,6 +92,10 @@ export async function applyReviewAction(id: string, input: unknown, actor: Ident
       || (action.issue !== undefined && !["incorrect-outline", "incorrect-symbol"].includes(String(action.issue)))) throw new LibraryError("Invalid review decision.");
     validLatex(action.latex);
     try { review = decide(session.review, sample, action.status as Decision["status"], action.latex, undefined, action.issue as Decision["issue"]); }
+    catch (error) { throw new LibraryError((error as Error).message); }
+  } else if (action.type === "accept-all") {
+    for (const sample of session.dataset.samples) if (!session.review.decisions[sample.id]) validLatex(sample.latex);
+    try { review = acceptPending(session.dataset, session.review); }
     catch (error) { throw new LibraryError((error as Error).message); }
   } else if (action.type === "undo") {
     const undone = undoDecision(session.review);

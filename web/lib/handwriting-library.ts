@@ -25,6 +25,7 @@ export type LibrarySession = ReviewSession & { name: string; version: number };
 export type ReviewCommand =
   | { type: "decide"; sampleId: string; status: Decision["status"]; latex: string; issue?: Decision["issue"] }
   | { type: "undo" }
+  | { type: "accept-all" }
   | { type: "approve" }
 ;
 export type ReviewAction = ReviewCommand & { expectedVersion: number };

@@ -1,12 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { approveDataset, datasetStats, decide, exportDataset, freshReview, parseDataset, reviewForImport, undoDecision } from "../lib/handwriting-dataset.ts";
+import { acceptPending, approveDataset, datasetStats, decide, exportDataset, freshReview, parseDataset, reviewForImport, undoDecision } from "../lib/handwriting-dataset.ts";
 
 const image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1cAAAAASUVORK5CYII=";
 const sample = (id, latex = "x", x = Number(id) * 20) => ({ id, latex, image, context: image,
   source: { file: "test.pdf", sha256: "a".repeat(64), page: 1, pageWidth: 600, pageHeight: 800, box: [x, 10, 10, 10] } });
 const dataset = () => parseDataset({ schemaVersion: 1, kind: "handwriting-candidates", name: "Test", samples: [sample("1"), sample("2"), sample("3"), sample("4", "y")] });
 function acceptAll(data) { return data.samples.reduce((review, item) => decide(review, item, "accepted", item.latex), freshReview()); }
+
+test("Accept all only accepts pending samples, preserves reviewed labels/issues and supports undo", () => {
+  const data = dataset();
+  let before = decide(freshReview(), data.samples[0], "accepted", "z");
+  before = decide(before, data.samples[1], "rejected", "q", undefined, "incorrect-outline");
+  const snapshot = structuredClone(before), after = acceptPending(data, before);
+  assert.deepEqual(before, snapshot);
+  assert.deepEqual(after.decisions["1"], before.decisions["1"]);
+  assert.deepEqual(after.decisions["2"], before.decisions["2"]);
+  assert.equal(after.decisions["3"].latex, "x");
+  assert.equal(after.decisions["4"].latex, "y");
+  assert.equal(datasetStats(data, after).pending, 0);
+  assert.equal(after.approvedAt, null);
+  assert.throws(() => acceptPending(data, after), /No pending/);
+  const undone = undoDecision(undoDecision(after).review).review;
+  assert.deepEqual(undone.decisions, before.decisions);
+});
 
 test("native worksheet provenance retains page-local geometry and boundary flags without claiming a PDF", () => {
   const data = dataset();

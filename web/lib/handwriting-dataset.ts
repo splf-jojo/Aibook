@@ -117,6 +117,19 @@ export function decide(review: Review, sample: Candidate, status: Decision["stat
   };
 }
 
+/** Explicit bulk action: keep reviewed labels/issues and leave approval separate. */
+export function acceptPending(dataset: CandidateDataset, review: Review, now = new Date().toISOString()): Review {
+  const pending = dataset.samples.filter(sample => !review.decisions[sample.id]);
+  if (!pending.length) throw new Error("No pending samples.");
+  const decisions = { ...review.decisions }, history = [...review.history];
+  for (const sample of pending) {
+    decisions[sample.id] = { status: "accepted", latex: text(sample.latex, 80), reviewedAt: now };
+    history.push({ id: sample.id, previous: null });
+  }
+  return { ...review, decisions, history: history.slice(-5000), revision: review.revision + 1,
+    inspectedRevision: null, approvedAt: null };
+}
+
 export function undoDecision(review: Review): { review: Review; id: string } | null {
   const last = review.history.at(-1);
   if (!last) return null;

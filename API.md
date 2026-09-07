@@ -89,7 +89,12 @@ Review PATCH accepts `{type:"decide",expectedVersion,sampleId,status,latex,issue
 `{type:"undo",expectedVersion}` or `{type:"approve",expectedVersion}`. Status is
 `accepted|rejected`; issue is `incorrect-outline|incorrect-symbol`. Publication
 requires current approval and successfully analyzed real medoids (minimum three
-accepted samples per class). It exposes neither the raw archive nor review.
+accepted samples per class). `{type:"accept-all",expectedVersion}` accepts every
+pending sample in the dataset in one atomic update, regardless of gallery filters.
+Existing decisions and corrected labels stay intact. Only dev can use it; stale
+versions return 409. Undo removes these decisions one sample at a time. Dataset
+approval and publication remain separate actions. Publication
+exposes neither the raw archive nor review.
 Published versions remain readable after later edits.
 
 Errors are `{error:string}`: 401 requires sign-in, 403 denies a dev action,

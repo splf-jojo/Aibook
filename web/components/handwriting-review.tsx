@@ -252,6 +252,9 @@ export function HandwritingReview({ datasetId }: { datasetId: string }) {
           <span className={styles.finalCount}>{stats.pending ? "Remaining: " + stats.pending
             : !stats.eligible.length ? "Need " + MIN_EXAMPLES + " accepted samples of one symbol"
             : "For export: " + stats.exportable}</span>
+          <button className={styles.secondaryButton} disabled={busy || !stats.pending}
+            title="Accept all pending samples in this dataset"
+            onClick={() => void persist({ type: "accept-all" })}>Accept all</button>
           {session.review.approvedAt
             ? <button className={styles.primaryButton} disabled={busy} onClick={() => {
               try { download(exportDataset(session), "handwriting-approved-" + session.fingerprint.slice(0, 10) + ".json"); }
