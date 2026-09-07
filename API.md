@@ -781,3 +781,29 @@ At least one non-null field is required.
   ]
 }
 ```
+
+## Эксперименты Analysis: средняя форма и аугментация
+
+Next.js обслуживает `/api/handwriting/datasets/{id}/experiment` и браузерный
+эквивалент `/dev/datasets/{id}/experiment`. Требуется серверная роль `dev`.
+Cookie-запросы записи требуют same-origin; native/API-клиент использует Bearer.
+
+- `GET ?latex=<encoded LaTeX>&version=<dataset version>&alignment=aligned|centered`
+  возвращает сохранённый `GlyphExperiment` либо вычисленные начальные значения
+  с `revision: 0`. Нужен завершённый анализ данного символа.
+- `POST` принимает `{action: "save"|"generate", latex, sourceVersion, alignment,
+  analysisKey, expectedRevision, config}`. `config` содержит `threshold`,
+  `points: [{id,x,y,kind,movable}]`, `augmentation: {strength,radius,count,seed,direction}`.
+  `save` сохраняет настройки/точки и сохраняет последний пакет вариантов;
+  `generate` также создаёт и заменяет этот пакет. PNG создаёт сервер.
+- Ответ содержит `revision`, размеры, `config`, `autoPoints`, `thresholdImage`,
+  `shapeImage`, `variants: [{image,seed,targets}]`, `generatedWith` и `updatedAt`.
+  `generatedWith` фиксирует настройки показанного пакета, даже после их изменения.
+- Лимиты: тело 16 KiB, до 32 точек с расстоянием ≥2 px, порог 0.05–0.95,
+  сила 0–16 px, радиус 12–96 px, 1–12 вариантов, целый seed 0–2147483647.
+  Направления: free/up/down/left/right/horizontal/vertical.
+- 400: некорректные параметры или невозможная деформация; 403: не dev;
+  404: нет датасета/готового символа; 409: устарел review, анализ или эксперимент.
+
+Эксперименты не меняют review, исходники и опубликованные шрифты.
+Схема БД: миграция `20260907_0006`. Подробности: `docs/HANDWRITING_EXPERIMENTS.md`.

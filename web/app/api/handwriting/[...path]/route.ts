@@ -1,6 +1,7 @@
 import { requestIdentity } from "@/lib/handwriting-access.server";
 import { catalog, createDataset, readDataset, readSource, applyReviewAction, analysisPreview, runAnalysis, publishDataset, fontCatalog, publishedFont, LibraryError } from "@/lib/handwriting-store.server";
 import { failure, json, readJson } from "@/lib/handwriting-http.server";
+import { readExperiment, saveExperiment } from "@/lib/handwriting-experiment.server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +28,13 @@ async function handle(request: Request, context: Context) {
         if (request.method === "PATCH") return json(await applyReviewAction(id, await readJson(request, 4096), actor));
       }
       if (parts.length === 3) {
+        if (action === "experiment") {
+          if (request.method === "GET") {
+            const query = new URL(request.url).searchParams;
+            return json(await readExperiment(id, query.get("latex"), Number(query.get("version")), query.get("alignment"), actor));
+          }
+          if (request.method === "POST") return json(await saveExperiment(id, await readJson(request, 16384), actor));
+        }
         if (action === "source" && request.method === "GET") return json(await readSource(id, actor));
         if (action === "analysis" && request.method === "GET") return json(await analysisPreview(id, actor));
         if (["analysis", "publish"].includes(action) && request.method === "POST") {

@@ -88,6 +88,39 @@ try {
   assert.equal(result.symbols[0].result.status, "complete");
   assert.equal(result.symbols[1].result.status, "failed");
   assert.match(result.symbols[1].result.error, /Sample s7/);
+  const experimentPath = `datasets/${id}/experiment`;
+  const query = `?latex=x&version=${version}&alignment=aligned`;
+  await call(alice, experimentPath + query, "GET", undefined, 403);
+  await call(dev, experimentPath + `?latex=z&version=${version}&alignment=aligned`, "GET", undefined, 404);
+  const experiment = await call(dev, experimentPath + query);
+  assert.equal(experiment.revision, 0);
+  assert.ok(experiment.config.points.length > 0);
+  const generate = { action: "generate", latex: "x", sourceVersion: version, alignment: "aligned", analysisKey: experiment.analysisKey,
+    expectedRevision: 0, config: { ...experiment.config, augmentation: { ...experiment.config.augmentation, strength: 2 } } };
+  await call(alice, experimentPath, "POST", generate, 403);
+  await call(dev, experimentPath, "POST", { ...generate, config: { ...generate.config, threshold: 100 } }, 400);
+  const generated = await call(dev, experimentPath, "POST", generate);
+  assert.equal(generated.revision, 1);
+  assert.equal(generated.variants.length, 4);
+  assert.deepEqual(await call(dev, experimentPath + query), generated, "Points, settings and PNG variants survive reload");
+  await call(dev, experimentPath, "POST", generate, 409);
+  const experimentRaces = await Promise.all([.45, .65].map(threshold => fetch(`${web}/api/handwriting/${experimentPath}`, {
+    method: "POST", headers: { Authorization: `Bearer ${dev.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ ...generate, action: "save", expectedRevision: 1, config: { ...generate.config, threshold } }),
+  })));
+  assert.deepEqual(experimentRaces.map(response => response.status).sort(), [200, 409]);
+  const savedExperiment = await call(dev, experimentPath + query);
+  assert.deepEqual(savedExperiment.variants, generated.variants, "Settings edits preserve the last generated batch");
+  assert.deepEqual(savedExperiment.generatedWith, generated.config);
+  assert.equal((await call(dev, experimentPath + `?latex=x&version=${version}&alignment=centered`)).revision, 0);
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM handwriting_experiments WHERE dataset_id=$1", [id])).rows[0].n, 1);
+  const oldJob = (await pool.query("SELECT result FROM handwriting_jobs WHERE dataset_id=$1 AND source_version=$2", [id, version])).rows[0].result;
+  await pool.query("UPDATE handwriting_jobs SET result=jsonb_set(result,'{computedAt}',to_jsonb('recomputed-fixture'::text)) WHERE dataset_id=$1 AND source_version=$2", [id, version]);
+  const rerun = await call(dev, experimentPath + query);
+  assert.equal(rerun.revision, 0, "A fresh analysis cannot reuse another analysis's points or variants");
+  assert.notEqual(rerun.analysisKey, experiment.analysisKey);
+  await call(dev, experimentPath, "POST", { ...generate, expectedRevision: 2 }, 409);
+  await pool.query("UPDATE handwriting_jobs SET result=$3 WHERE dataset_id=$1 AND source_version=$2", [id, version, oldJob]);
   const publication = await call(dev, `datasets/${id}/publish`, "POST", { expectedVersion: version });
   const font = await call(bob, `fonts/${publication.id}`);
   assert.equal(font.glyphs.length, 1);
@@ -97,6 +130,8 @@ try {
   assert.ok(alpha.includes(0) && alpha.includes(255));
   assert.deepEqual((await call(alice, `datasets/${id}`)).review.decisions, before.review.decisions);
   await call(dev, `datasets/${id}`, "PATCH", { type: "decide", expectedVersion: version, sampleId: "s0", latex: "x", status: "rejected" });
+  await call(dev, experimentPath, "POST", { ...generate, expectedRevision: savedExperiment.revision }, 409);
+  await call(dev, experimentPath + query, "GET", undefined, 409);
   assert.deepEqual(await call(bob, `fonts/${publication.id}`), font, "Published handwriting must survive changes to its source review");
   assert.equal((await call(alice, `datasets/${id}/analysis`)).approved, false);
   assert.ok((await call(bob, "fonts")).some(item => item.id === publication.id));

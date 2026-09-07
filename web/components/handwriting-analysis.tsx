@@ -7,6 +7,8 @@ import { loadAnalysis, startAnalysis, publishDataset, type AnalysisPreview } fro
 import { analysisLabels } from "@/lib/handwriting-analysis";
 import { Latex } from "./handwriting-review";
 import styles from "./handwriting-review.module.css";
+import experimentStyles from "./handwriting-experiment.module.css";
+import { HandwritingExperiment } from "./handwriting-experiment";
 
 export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
   const [data, setData] = useState<AnalysisPreview | null>(null);
@@ -14,6 +16,10 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
   const [busy, setBusy] = useState(false);
   const [alignment, setAlignment] = useState<"centered" | "aligned">("aligned");
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [pendingExperiments, setPendingExperiments] = useState<Set<string>>(new Set());
+  const experimentPending = useCallback((latex: string, pending: boolean) => {
+    setPendingExperiments(previous => { if (previous.has(latex) === pending) return previous; const next = new Set(previous); if (pending) next.add(latex); else next.delete(latex); return next; });
+  }, []);
   const requestNumber = useRef(0), currentId = useRef(datasetId), mounted = useRef(false), locked = useRef(false);
   currentId.current = datasetId;
   const refresh = useCallback(async () => {
@@ -68,19 +74,19 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
   const hasResults = data?.symbols.some((symbol) => symbol.result?.status === "complete");
   return <main className={styles.app} lang="en">
     <header className={styles.topbar}>
-      <Link href="/dev/dataset" className={styles.brand}><ArrowLeft size={17} />Datasets</Link>
-      <div className={styles.tools}><Link href="/dev" className={styles.iconButton} aria-label="Dev home" title="Dev home"><Home size={18} /></Link></div>
+      <Link href="/dev/dataset" className={styles.brand} aria-disabled={pendingExperiments.size > 0} onClick={event => { if (pendingExperiments.size) event.preventDefault(); }}><ArrowLeft size={17} />Datasets</Link>
+      <div className={styles.tools}><Link href="/dev" className={styles.iconButton} aria-label="Dev home" title="Dev home" aria-disabled={pendingExperiments.size > 0} onClick={event => { if (pendingExperiments.size) event.preventDefault(); }}><Home size={18} /></Link></div>
     </header>
-    <div className={styles.libraryContent}>
+    <div className={experimentStyles.content}>
       {error && <div role="alert" className={styles.error}>{error}<button className={styles.secondaryButton} onClick={() => void refresh()}>Reload</button></div>}
       {!data && !error && <div className={styles.loading}><LoaderCircle className={styles.spinner} size={20} role="status" aria-label="Loading dataset" /></div>}
       {data && <>
         <div className={styles.libraryHeading}>
           <h1>{data.name}</h1>
-          {data.approved && ["complete", "partial"].includes(data.status) && hasResults && <button className={styles.primaryButton} disabled={busy || Boolean(data.publicationId)} onClick={() => void publish()}>
+          {data.approved && ["complete", "partial"].includes(data.status) && hasResults && <button className={styles.primaryButton} disabled={busy || pendingExperiments.size > 0 || Boolean(data.publicationId)} onClick={() => void publish()}>
             {data.publicationId ? "Published" : "Publish"}
           </button>}
-          {data.approved && (running || data.status !== "complete") && <button className={styles.primaryButton} disabled={running} onClick={() => void analyze()}>
+          {data.approved && (running || data.status !== "complete") && <button className={styles.primaryButton} disabled={running || pendingExperiments.size > 0} onClick={() => void analyze()}>
             {running && <LoaderCircle className={styles.spinner} size={16} />}
             {running ? "Analyzing" : data.status === "partial" ? "Retry analysis" : data.status === "stale" ? "Reanalyze" : "Analyze"}
           </button>}
@@ -92,15 +98,15 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
           <div className={styles.analysisToolbar}>
             {hasResults ? <>
               <div className={styles.alignmentSwitch} role="group" aria-label="Alignment">
-                {(["centered", "aligned"] as const).map((value) => <button key={value} aria-pressed={alignment === value} onClick={() => setAlignment(value)}>
+                {(["centered", "aligned"] as const).map((value) => <button key={value} disabled={pendingExperiments.size > 0} aria-pressed={alignment === value} onClick={() => setAlignment(value)}>
                   {value === "centered" ? "Centered" : "Aligned"}
                 </button>)}
               </div>
               <div className={styles.heatmapLegend} aria-label="Ink coverage: white is 0 percent, dark red is 100 percent"><span>0%</span><i /><span>100%</span></div>
             </> : <span className={styles.datasetMeta} role="status">{running ? `Analyzing${data.progress ? ` · ${data.progress.completed} / ${data.progress.total}` : ""}` : analysisLabels[data.status]}</span>}
           </div>
-          <table className={styles.analysisTable}>
-            <thead><tr><th scope="col">Symbol</th><th scope="col">Heatmap</th><th scope="col">Medoid</th></tr></thead>
+          <div className={experimentStyles.tableScroll}><table className={`${styles.analysisTable} ${experimentStyles.table}`}>
+            <thead><tr><th scope="col">Symbol</th><th scope="col">Heatmap</th><th scope="col">Medoid</th><th scope="col">Mean + threshold</th><th scope="col">Mean shape</th><th scope="col">Augmentation</th></tr></thead>
             <tbody>{data.symbols.map((symbol, index) => {
               const result = symbol.result, ready = result?.status === "complete" ? result : null;
               const open = expanded === symbol.latex;
@@ -109,18 +115,19 @@ export function HandwritingAnalysis({ datasetId }: { datasetId: string }) {
                   {ready ? <button className={styles.sampleCount} aria-expanded={open} aria-controls={`samples-${index}`} onClick={() => setExpanded(open ? null : symbol.latex)}>{symbol.count} samples</button>
                     : <span className={styles.datasetMeta}>{symbol.count} samples</span>}
                 </th>
-                {result?.status === "failed" ? <td colSpan={2} className={styles.analysisFailure}>{result.error} <Link href={`/dev/dataset/labeling/${datasetId}`}>Review</Link></td> : <>
+                {result?.status === "failed" ? <td colSpan={5} className={styles.analysisFailure}>{result.error} <Link href={`/dev/dataset/labeling/${datasetId}`}>Review</Link></td> : <>
                   <td>{ready ? <img className={styles.analysisImage} src={ready.heatmap[alignment]} width={ready.width} height={ready.height} alt={`${symbol.latex} ${alignment} heatmap`} /> : <span aria-label="Heatmap not calculated">—</span>}</td>
                   <td>{ready ? <img className={styles.analysisImage} src={ready.medoid.image} width={ready.width} height={ready.height} alt={`${symbol.latex} medoid`} title={`Sample ${ready.medoid.id}`} /> : <span aria-label="Medoid not selected">—</span>}</td>
+                  {ready ? <HandwritingExperiment key={`${datasetId}:${data.sourceVersion}:${data.computedAt}:${symbol.latex}:${alignment}`} datasetId={datasetId} latex={symbol.latex} version={data.sourceVersion} alignment={alignment} onPending={experimentPending} /> : <td colSpan={3}>—</td>}
                 </>}
-              </tr>{ready && <tr hidden={!open} id={`samples-${index}`}><td colSpan={3} className={styles.sampleCell}>
+              </tr>{ready && <tr hidden={!open} id={`samples-${index}`}><td colSpan={6} className={styles.sampleCell}>
                 {open && <div className={styles.analysisSamples}>{ready.samples.map((sample) => <figure key={sample.id} title={`${sample.source.file} · Page ${sample.source.page} · ${sample.id}`}>
                   <img className={styles.sampleImage} src={sample[alignment]} width={ready.width} height={ready.height} alt={`${symbol.latex} sample ${sample.id}`} />
                   <figcaption>{sample.id === ready.medoid.id ? "Medoid" : `Page ${sample.source.page}`}</figcaption>
                 </figure>)}</div>}
               </td></tr>}</Fragment>;
             })}</tbody>
-          </table>
+          </table></div>
         </>}
       </>}
     </div>

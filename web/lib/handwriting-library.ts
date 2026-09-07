@@ -1,6 +1,7 @@
 import type { Decision, Review, ReviewSession } from "./handwriting-dataset.ts";
 import type { AnalysisStatus, AnalysisSymbol } from "./handwriting-analysis.ts";
 import type { WritingDataset } from "./handwriting-writing.ts";
+import type { Alignment, ExperimentConfig, GlyphExperiment } from "./handwriting-experiment.ts";
 
 export type DatasetSummary = {
   ownerId?: string;
@@ -46,6 +47,13 @@ async function response<T>(result: Response): Promise<T> {
 export const listDatasets = () => fetch("/dev/datasets", { cache: "no-store" }).then(response<DatasetSummary[]>);
 export const loadDataset = (id: string) => fetch(`/dev/datasets/${id}`, { cache: "no-store" }).then(response<LibrarySession>);
 export const loadAnalysis = (id: string) => fetch(`/dev/datasets/${id}/analysis`, { cache: "no-store" }).then(response<AnalysisPreview>);
+export const loadExperiment = (id: string, latex: string, version: number, alignment: Alignment, signal?: AbortSignal) => fetch(
+  `/dev/datasets/${id}/experiment?${new URLSearchParams({ latex, version: String(version), alignment })}`, { cache: "no-store", signal },
+).then(response<GlyphExperiment>);
+export const updateExperiment = (id: string, experiment: GlyphExperiment, config: ExperimentConfig, action: "save" | "generate") => fetch(`/dev/datasets/${id}/experiment`, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, latex: experiment.latex, sourceVersion: experiment.sourceVersion,
+    alignment: experiment.alignment, analysisKey: experiment.analysisKey, expectedRevision: experiment.revision, config }),
+}).then(response<GlyphExperiment>);
 export const loadWritingDataset = (id: string, signal?: AbortSignal) => fetch(`/dev/datasets/${id}/writing`, { cache: "no-store", signal }).then(response<WritingDataset>);
 export const startAnalysis = (id: string, expectedVersion: number) => fetch(`/dev/datasets/${id}/analysis`, {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedVersion }),
