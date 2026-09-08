@@ -51,7 +51,7 @@ export async function renderLatexImage(latex: string, fontSize = 32, maxWidth = 
   svg.setAttribute("viewBox", `${x - padding} ${y - padding} ${w + padding * 2} ${h + padding * 2}`);
   svg.setAttribute("width", String(width * 3));
   svg.setAttribute("height", String(height * 3));
-  svg.setAttribute("style", "color:#2456a6");
+  svg.setAttribute("style", "color:#000000");
   const measuringHost = document.createElement("div");
   measuringHost.style.cssText = "position:fixed;left:-10000px;top:0;visibility:hidden;pointer-events:none";
   measuringHost.setAttribute("aria-hidden", "true");
@@ -102,8 +102,8 @@ export function renderBarChart(chart: { bars: { label: string; value: number }[]
   canvas.height = height * 3;
   const ctx = canvas.getContext("2d")!;
   ctx.scale(3, 3);
-  ctx.strokeStyle = "#2456a6";
-  ctx.fillStyle = "#2456a6";
+  ctx.strokeStyle = "#000000";
+  ctx.fillStyle = "#000000";
   ctx.lineWidth = 1.6;
   ctx.font = '15px "Segoe Print", "Comic Sans MS", cursive';
   const left = 66, top = 32, bottom = 204, right = 520;
@@ -119,10 +119,10 @@ export function renderBarChart(chart: { bars: { label: string; value: number }[]
   chart.bars.forEach((bar, index) => {
     const x = left + index * cell + cell * 0.15;
     const barHeight = bar.value / max * (bottom - top);
-    ctx.fillStyle = "rgba(36,86,166,0.16)";
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
     ctx.fillRect(x, bottom - barHeight, cell * 0.7, barHeight);
     ctx.strokeRect(x, bottom - barHeight, cell * 0.7, barHeight);
-    ctx.fillStyle = "#2456a6";
+    ctx.fillStyle = "#000000";
     ctx.textAlign = "center";
     ctx.fillText(bar.label, x + cell * 0.35, bottom + 23, cell - 3);
   });

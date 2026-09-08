@@ -19,6 +19,7 @@ import {
   Sparkles,
   Spline,
   Scan,
+  Trash2,
   X,
 } from "lucide-react";
 import type Konva from "konva";
@@ -26,6 +27,7 @@ import type { KonvaEventObject } from "konva/lib/Node";
 import {
   PointerEvent as ReactPointerEvent,
   type RefObject,
+  type SetStateAction,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -55,6 +57,7 @@ import { CanvasPet, type CanvasPetMood } from "./canvas-pet";
 import companion from "./canvas-companion.module.css";
 import { CanvasAiSettings } from "./canvas-ai-settings";
 import { CanvasConversation } from "./canvas-conversation";
+import { solutionMessage } from "@/lib/canvas-solution-link";
 import { useCanvasZoom } from "./use-canvas-zoom";
 import viewportStyles from "./canvas-viewport.module.css";
 
@@ -1059,6 +1062,12 @@ export function KonvaDrawingCanvas({
   const selectionLayerRef = useRef<Konva.Layer | null>(null);
   const sceneLayerRef = useRef<Konva.Layer | null>(null);
   const drawingRef = useRef(false);
+  const pointerIdRef = useRef<number | null>(null);
+  const pageNodesRef = useRef(new Map<number, HTMLDivElement>());
+  const lastPointerPointRef = useRef<Point | null>(null);
+  const pointerScrollRef = useRef<number | null>(null);
+  const pointerEventRef = useRef<PointerEvent | null>(null);
+  const movePointerRef = useRef<(event: PointerEvent) => void>(() => {});
   const startRef = useRef<Point | null>(null);
   const draggingSelectionRef = useRef(false);
   const lastDragPointRef = useRef<Point | null>(null);
@@ -1079,11 +1088,18 @@ export function KonvaDrawingCanvas({
   const eraserPressTimerRef = useRef<number | null>(null);
   const eraserLongPressTriggeredRef = useRef(false);
   const [fitSize, setFitSize] = useState<StageSize>({ width: 0, height: 0 });
-  const { stageSize, viewportRef, zoom } = useCanvasZoom(fitSize, () => drawingRef.current || draggingSelectionRef.current);
   const [activePageIndex, setActivePageIndex] = useState(0);
-  const [elements, setElements] = useState<SceneElement[]>(
+  const [elements, setElementsState] = useState<SceneElement[]>(
     () => initialPage.elements as SceneElement[],
   );
+  // Pointer events can cross a page before React paints. Keep page data current synchronously.
+  const setElements = useCallback((value: SetStateAction<SceneElement[]>) => {
+    const next = typeof value === "function" ? value(elementsRef.current) : value;
+    elementsRef.current = next;
+    canvasPagesRef.current = canvasPagesRef.current.map((page, index) => index === activePageIndexRef.current
+      ? { ...page, elements: next, appleDrawingData: page.elements === next ? page.appleDrawingData : undefined } : page);
+    setElementsState(next);
+  }, []);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [tool, setTool] = useState<Tool>("brush");
   const [showElementBounds, setShowElementBounds] = useState(false);
@@ -1117,7 +1133,16 @@ export function KonvaDrawingCanvas({
   const petMood: CanvasPetMood = sidebarBusy ? (aiAnimationRef.current !== null ? "writing" : "thinking") : solution ? "ready" : "idle";
   const visiblePageIndex = solution ? draftPageIndex : activePageIndex;
   const visiblePages = solution?.pages ?? canvasPagesRef.current;
+  const { stageSize, viewportRef, zoom } = useCanvasZoom(fitSize, () => drawingRef.current || draggingSelectionRef.current, visiblePages.length);
   const visibleElements = solution ? solution.pages[draftPageIndex].elements as SceneElement[] : elements;
+  useLayoutEffect(() => {
+    if (solution) pageNodesRef.current.get(draftPageIndex)?.scrollIntoView({ block: "nearest" });
+  }, [solution?.id, draftPageIndex]);
+  const activatePage = (index: number) => {
+    activePageIndexRef.current = index;
+    setActivePageIndex(index);
+    setElements(canvasPagesRef.current[index].elements as SceneElement[]);
+  };
 
   useEffect(() => () => { photoRequestRef.current += 1; }, []);
 
@@ -1279,17 +1304,20 @@ export function KonvaDrawingCanvas({
   const openPage = useCallback(
     async (nextIndex: number) => {
       if (solution) {
-        if (nextIndex >= 0 && nextIndex < solution.pages.length) setDraftPageIndex(nextIndex);
-        return;
+        if (nextIndex >= 0 && nextIndex < solution.pages.length) {
+          setDraftPageIndex(nextIndex);
+          pageNodesRef.current.get(nextIndex)?.scrollIntoView({ block: "start" });
+          return true;
+        }
+        return false;
       }
-      if (sidebarBusy) return;
-      if (photoLoading) return;
-      if (nextIndex < 0 || nextIndex >= canvasPagesRef.current.length) return;
+      if (sidebarBusy || photoLoading || drawingRef.current) return false;
+      if (nextIndex < 0 || nextIndex >= canvasPagesRef.current.length) return false;
       if (canvasSaveTimerRef.current !== null) {
         window.clearTimeout(canvasSaveTimerRef.current);
         canvasSaveTimerRef.current = null;
       }
-      if (!(await queueCanvasSave())) return;
+      if (!(await queueCanvasSave())) return false;
       const nextPage = canvasPagesRef.current[nextIndex];
       activePageIndexRef.current = nextIndex;
       elementsRef.current = nextPage.elements as SceneElement[];
@@ -1298,6 +1326,8 @@ export function KonvaDrawingCanvas({
       setSelectedIds([]);
       selectionRef.current = null;
       setSelection(null);
+      pageNodesRef.current.get(nextIndex)?.scrollIntoView({ block: "start" });
+      return true;
     },
     [photoLoading, queueCanvasSave, sidebarBusy, solution],
   );
@@ -1608,9 +1638,27 @@ export function KonvaDrawingCanvas({
     selectionRef.current = null;
     setSelection(null);
     setAiError(null);
-    if (await queueCanvasSave()) appendAiMessage(accepted.chatId, text.accepted);
+    if (await queueCanvasSave()) appendAiMessage(accepted.chatId, solutionMessage(text.accepted, text.solutionLink, canvas.id, accepted.id));
     else setAiError(text.acceptedSaveFailed);
     aiSubmitRef.current = false;
+  };
+
+  const canFocusSolution = (canvasId: string, solutionId: string) => canvasId === canvas.id && !canvasAiBusy && !photoLoading &&
+    canvasPagesRef.current.some(page => (page.elements as SceneElement[]).some(element => element.kind === "image" && element.solutionId === solutionId));
+  const focusSolution = async (canvasId: string, solutionId: string) => {
+    if (!canFocusSolution(canvasId, solutionId)) return;
+    const index = canvasPagesRef.current.findIndex(page => (page.elements as SceneElement[]).some(element => element.kind === "image" && element.solutionId === solutionId));
+    if (!await openPage(index)) return;
+    const ids = elementsRef.current.filter(element => element.kind === "image" && element.solutionId === solutionId).map(element => element.id);
+    const bounds = boundsForElements(elementsRef.current, ids);
+    setTool("select"); setSelectedIds(ids); setSelection(bounds); selectionRef.current = bounds;
+    requestAnimationFrame(() => {
+      const viewport = viewportRef.current, page = pageNodesRef.current.get(index);
+      if (!bounds || !viewport || !page) return;
+      const view = viewport.getBoundingClientRect(), rect = page.getBoundingClientRect();
+      viewport.scrollBy({ left: rect.left - view.left + (bounds.x + bounds.width / 2) * scaleX - view.width / 2,
+        top: rect.top - view.top + bounds.y * scaleY - 64 });
+    });
   };
 
   const changeSolutionHistory = async (direction: "undo" | "redo") => {
@@ -1915,12 +1963,50 @@ export function KonvaDrawingCanvas({
     void sendSelection(selectedArea);
   };
 
-  const handlePointerDown = (event: KonvaEventObject<PointerEvent>) => {
-    if (event.evt.button !== 0 || canvasAiBusy) return;
-    const point = pointFromStage();
+  const pointOnPage = (event: PointerEvent, index = activePageIndexRef.current): Point | null => {
+    const rect = pageNodesRef.current.get(index)?.getBoundingClientRect();
+    if (!rect) return null;
+    return { x: Math.max(0, Math.min(PAGE_WIDTH, (event.clientX - rect.left) / scaleX)),
+      y: Math.max(0, Math.min(PAGE_HEIGHT, (event.clientY - rect.top) / scaleY)) };
+  };
+  const extendPaper = (point: Point) => {
+    if (tool !== "brush" || point.y < PAGE_HEIGHT - 32 || activePageIndexRef.current !== canvasPagesRef.current.length - 1) return;
+    const current = canvasPagesRef.current[activePageIndexRef.current];
+    canvasPagesRef.current = [...canvasPagesRef.current, { id: createId(), width: PAGE_WIDTH, height: PAGE_HEIGHT,
+      pageTemplate: current.pageTemplate, elements: [] }];
+    setElements([...elementsRef.current]);
+  };
+  const handlePointerDown = (event: KonvaEventObject<PointerEvent>, pageIndex: number) => {
+    if (event.evt.button !== 0 || canvasAiBusy || photoLoading || drawingRef.current) return;
+    if (pageIndex !== activePageIndexRef.current) {
+      activatePage(pageIndex); setSelectedIds([]); selectionRef.current = null; setSelection(null);
+    }
+    stageRef.current = event.target.getStage();
+    const point = pointOnPage(event.evt, pageIndex);
     if (!point) return;
     drawingRef.current = true;
+    pointerIdRef.current = event.evt.pointerId;
+    lastPointerPointRef.current = point;
+    pointerEventRef.current = event.evt;
+    viewportRef.current?.setPointerCapture(event.evt.pointerId);
     startRef.current = point;
+    extendPaper(point);
+    if (tool === "brush") {
+      const scroll = () => {
+        const viewport = viewportRef.current, pointer = pointerEventRef.current;
+        if (!drawingRef.current || !viewport || !pointer) return;
+        const rect = viewport.getBoundingClientRect();
+        if (pointer.clientX >= rect.left && pointer.clientX <= rect.right) {
+          const dy = pointer.clientY > rect.bottom - 36 ? Math.min(12, (pointer.clientY - rect.bottom + 36) / 3)
+            : pointer.clientY < rect.top + 36 ? -Math.min(12, (rect.top + 36 - pointer.clientY) / 3) : 0;
+          const before = viewport.scrollTop;
+          viewport.scrollTop += dy;
+          if (viewport.scrollTop !== before) movePointerRef.current(pointer);
+        }
+        pointerScrollRef.current = requestAnimationFrame(scroll);
+      };
+      pointerScrollRef.current = requestAnimationFrame(scroll);
+    }
 
     if (
       tool === "select" &&
@@ -1963,10 +2049,31 @@ export function KonvaDrawingCanvas({
     }
   };
 
-  const handlePointerMove = () => {
-    if (!drawingRef.current) return;
-    const point = pointFromStage();
+  const handlePointerMove = (event: PointerEvent) => {
+    if (!drawingRef.current || event.pointerId !== pointerIdRef.current) return;
+    if (!(event.buttons & 1)) { finishPointer(); return; }
+    pointerEventRef.current = event;
+    if (tool === "brush") {
+      const target = [...pageNodesRef.current].find(([, node]) => {
+        const rect = node.getBoundingClientRect();
+        return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+      })?.[0];
+      if (target !== undefined && target !== activePageIndexRef.current) {
+        const previousIndex = activePageIndexRef.current, edge = pointOnPage(event);
+        const oldId = activeStrokeIdRef.current;
+        if (edge) setElements(current => current.map(element => element.kind === "stroke" && element.id === oldId
+          ? { ...element, points: [...element.points, edge.x, edge.y] } : element));
+        activatePage(target);
+        const point = pointOnPage(event)!;
+        const id = createId(); activeStrokeIdRef.current = id;
+        setElements(current => [...current, { id, kind: "stroke", mode: "draw", strokeWidth: 4.5,
+          points: [point.x, target > previousIndex ? 0 : PAGE_HEIGHT, point.x, point.y] }]);
+      }
+    }
+    const point = pointOnPage(event);
     if (!point) return;
+    lastPointerPointRef.current = point;
+    extendPaper(point);
 
     if (draggingSelectionRef.current && tool === "select") {
       const last = lastDragPointRef.current;
@@ -2022,9 +2129,13 @@ export function KonvaDrawingCanvas({
 
   const finishPointer = () => {
     if (!drawingRef.current) return;
-    const end = pointFromStage();
+    const end = lastPointerPointRef.current;
     const start = startRef.current;
     drawingRef.current = false;
+    if (pointerScrollRef.current !== null) cancelAnimationFrame(pointerScrollRef.current);
+    pointerScrollRef.current = null; pointerEventRef.current = null;
+    const pointerId = pointerIdRef.current; pointerIdRef.current = null;
+    if (pointerId !== null && viewportRef.current?.hasPointerCapture(pointerId)) viewportRef.current.releasePointerCapture(pointerId);
     startRef.current = null;
     activeStrokeIdRef.current = null;
     lastEraserPointRef.current = null;
@@ -2041,22 +2152,54 @@ export function KonvaDrawingCanvas({
       setSelection(null);
       return;
     }
-    const ids = elements
+    const ids = elementsRef.current
       .filter((element) => {
         const bounds = sceneElementBounds(element);
         return bounds !== null && rectsIntersect(rect, bounds);
       })
       .map((element) => element.id);
-    const activeBounds = boundsForElements(elements, ids);
+    const activeBounds = boundsForElements(elementsRef.current, ids);
     setSelectedIds(ids);
     selectionRef.current = activeBounds;
     setSelection(activeBounds);
   };
 
+  useLayoutEffect(() => { movePointerRef.current = handlePointerMove; });
+  useEffect(() => () => { if (pointerScrollRef.current !== null) cancelAnimationFrame(pointerScrollRef.current); }, []);
+
+  useEffect(() => {
+    const finish = (event: PointerEvent) => { if (event.pointerId === pointerIdRef.current) finishPointer(); };
+    const hidden = () => { if (document.visibilityState === "hidden") finishPointer(); };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    window.addEventListener("lostpointercapture", finish);
+    window.addEventListener("blur", finishPointer);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      window.removeEventListener("lostpointercapture", finish);
+      window.removeEventListener("blur", finishPointer);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  });
+
+  const deleteSelectedObjects = useCallback(() => {
+    if (canvasAiBusy || photoLoading || !selectedIds.length || drawingRef.current) return;
+    const selected = new Set(selectedIds);
+    setElements(current => current.filter(element => !selected.has(element.id)));
+    setSelectedIds([]); setSelection(null); selectionRef.current = null; setContextMenu(null);
+  }, [canvasAiBusy, photoLoading, selectedIds, setElements]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (canvasAiBusy || (event.target instanceof HTMLElement &&
-        (event.target.isContentEditable || ["INPUT", "TEXTAREA"].includes(event.target.tagName)))) return;
+        (event.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)))) return;
+      if (event.key === "Delete" && !event.ctrlKey && !event.metaKey && !event.altKey && selectedIds.length) {
+        event.preventDefault(); deleteSelectedObjects(); return;
+      }
       if (!(event.ctrlKey || event.metaKey) || tool !== "select") return;
       if (event.key.toLowerCase() === "c" && selectedIds.length) {
         event.preventDefault();
@@ -2070,13 +2213,13 @@ export function KonvaDrawingCanvas({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [canvasAiBusy, copySelectedObjects, pasteClipboardAt, selectedIds.length, tool]);
+  }, [canvasAiBusy, copySelectedObjects, deleteSelectedObjects, pasteClipboardAt, selectedIds.length, tool]);
 
   const cursor = tool === "select" ? (selectedIds.length ? "move" : "cell") : "crosshair";
   const selectionIslandLeft = selection
-    ? stageSize.width < 208
+    ? stageSize.width < 264
       ? stageSize.width / 2
-      : Math.max(104, Math.min((selection.x + selection.width / 2) * scaleX, stageSize.width - 104))
+      : Math.max(132, Math.min((selection.x + selection.width / 2) * scaleX, stageSize.width - 132))
     : 0;
   const selectionIslandTop = selection
     ? selection.y * scaleY >= 58
@@ -2269,36 +2412,42 @@ export function KonvaDrawingCanvas({
         )}
 
         <div ref={viewportRef} className={viewportStyles.viewport} data-canvas-zoom={zoom}>
-        <div className="relative flex min-h-full min-w-full justify-center pb-4" style={{ width: stageSize.width + 48, height: stageSize.height + 16 }}>
-        <div
-          aria-label="A4 canvas"
+        <div className="relative flex min-h-full min-w-full flex-col items-center gap-4 pb-4" style={{ width: stageSize.width + 48 }}>
+        {visiblePages.map((page, pageIndex) => <div key={page.id}
+          ref={node => { if (node) pageNodesRef.current.set(pageIndex, node); else pageNodesRef.current.delete(pageIndex); }}
+          data-page-index={pageIndex}
+          aria-label={`A4 canvas · ${pageIndex + 1}`}
           className="keep-white relative flex-none overflow-hidden rounded-[3px] bg-white shadow-[0_4px_24px_rgba(17,24,39,0.08)] ring-1 ring-[#dfe3e8]"
           style={{ height: stageSize.height, width: stageSize.width }}
         >
           {solution && (
             <div className="pointer-events-none absolute bottom-2 right-3 z-10 rounded-md bg-[#eff6ff] px-2 py-1 text-xs text-[#2563eb]">
-              {text.draftPage} {draftPageIndex + 1}
+              {text.draftPage} {pageIndex + 1}
             </div>
           )}
           {stageSize.width > 0 && stageSize.height > 0 && (
             <Stage
               height={stageSize.height}
-              onContextMenu={handleCanvasContextMenu}
-              onPointerCancel={finishPointer}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={finishPointer}
-              ref={stageRef}
+              onContextMenu={event => {
+                if (canvasAiBusy || photoLoading || drawingRef.current) return;
+                if (pageIndex !== activePageIndexRef.current) {
+                  setSelectedIds([]); setSelection(null); selectionRef.current = null;
+                }
+                activatePage(pageIndex); stageRef.current = event.target.getStage();
+                handleCanvasContextMenu(event);
+              }}
+              onPointerDown={event => handlePointerDown(event, pageIndex)}
+              ref={pageIndex === visiblePageIndex ? stageRef : undefined}
               style={{ cursor, touchAction: "none" }}
               width={stageSize.width}
             >
               <Layer listening={false} scaleX={scaleX} scaleY={scaleY}>
                 <KonvaRect fill="#ffffff" height={PAGE_HEIGHT} width={PAGE_WIDTH} />
-                <PdfPageBackground source={canvas.content.pdfData} pageIndex={visiblePages[visiblePageIndex]?.pdfPageIndex}
+                <PdfPageBackground source={canvas.content.pdfData} pageIndex={page.pdfPageIndex}
                   width={PAGE_WIDTH} height={PAGE_HEIGHT} />
               </Layer>
-              <Layer listening={false} ref={sceneLayerRef} scaleX={scaleX} scaleY={scaleY}>
-                {visibleElements.map((element) => {
+              <Layer listening={false} ref={pageIndex === visiblePageIndex ? sceneLayerRef : undefined} scaleX={scaleX} scaleY={scaleY}>
+                {(pageIndex === visiblePageIndex ? visibleElements : page.elements as SceneElement[]).map((element) => {
                   if (element.kind === "stroke") {
                     return (
                       <Line
@@ -2357,7 +2506,7 @@ export function KonvaDrawingCanvas({
               </Layer>
               {solution && (
                 <Layer listening={false} scaleX={scaleX} scaleY={scaleY}>
-                  {solution.pieces.map((piece, index) => ({ ...piece, index })).filter((piece) => piece.pageIndex === draftPageIndex && piece.index <= inkProgress.step).map((piece) => {
+                  {solution.pieces.map((piece, index) => ({ ...piece, index })).filter((piece) => piece.pageIndex === pageIndex && piece.index <= inkProgress.step).map((piece) => {
                     const progress = piece.index < inkProgress.step ? 1 : inkProgress.progress;
                     const { element } = piece;
                     return (
@@ -2370,14 +2519,14 @@ export function KonvaDrawingCanvas({
                         {progress > 0 && progress < 1 && (
                           <Line points={[element.x + element.width * progress, element.y + element.height,
                             element.x + element.width * progress + 7, element.y + element.height - 12]}
-                            stroke="#2456a6" strokeWidth={3} lineCap="round" />
+                            stroke="#000000" strokeWidth={3} lineCap="round" />
                         )}
                       </Group>
                     );
                   })}
                 </Layer>
               )}
-              <Layer listening={false} ref={selectionLayerRef} scaleX={scaleX} scaleY={scaleY}>
+              {pageIndex === visiblePageIndex && <Layer listening={false} ref={selectionLayerRef} scaleX={scaleX} scaleY={scaleY}>
                 {showElementBounds && <ElementBoundsOverlay sceneLayerRef={sceneLayerRef} />}
                 {selection && (
                   <KonvaRect
@@ -2405,10 +2554,10 @@ export function KonvaDrawingCanvas({
                       y={handle.y - 6}
                     />
                   ))}
-              </Layer>
+              </Layer>}
             </Stage>
           )}
-          {selection && selectedIds.length > 0 && (
+          {pageIndex === visiblePageIndex && selection && selectedIds.length > 0 && (
             <div
               aria-label={text.selectionActions}
               className="absolute z-20 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-[#dfe3e8] bg-white p-1.5 shadow-lg"
@@ -2465,9 +2614,14 @@ export function KonvaDrawingCanvas({
               >
                 <MonitorUp aria-hidden="true" size={17} strokeWidth={2} />
               </button>
+              <button aria-label={text.deleteObject} title={`${text.deleteObject} (Delete)`} type="button"
+                className="grid size-9 place-items-center rounded-lg text-[#b42318] hover:bg-[#fff1ee] disabled:opacity-50"
+                disabled={canvasAiBusy || photoLoading} onClick={deleteSelectedObjects}>
+                <Trash2 aria-hidden="true" size={17} strokeWidth={2} />
+              </button>
             </div>
           )}
-        </div>
+        </div>)}
         </div>
         </div>
       </section>
@@ -2540,6 +2694,7 @@ export function KonvaDrawingCanvas({
             ))}
           </div>
           <CanvasConversation messages={activeChat?.messages ?? []} chatId={activeChatId} labels={text} mood={petMood}
+            onSolutionClick={(canvasId, solutionId) => void focusSolution(canvasId, solutionId)} canFocusSolution={canFocusSolution}
             pending={sidebarBusy && loadingChatId === activeChatId && aiAnimationRef.current === null} />
           {(solution || sidebarBusy) && (
             <div className={companion.draft} aria-live="polite">

@@ -26,32 +26,34 @@ export function InsetControls({ label, value, onChange }: { label: string; value
   </fieldset>;
 }
 
-export function SymbolBoxes({ result, selected, onSelect }: { result: WritingResult; selected: number | null; onSelect: (index: number) => void }) {
+export function SymbolBoxes({ result, selected, onSelect, boxes = true, references = false }: { result: WritingResult; selected: number | null; onSelect: (index: number) => void; boxes?: boolean; references?: boolean }) {
   return <svg className={styles.boxOverlay} width={result.width} height={result.height} viewBox={`0 0 ${result.width} ${result.height}`} role="group" aria-label="Symbol boxes">
     <g transform={`translate(${result.origin.x} ${result.origin.y})`}>
       {result.placements.map((p, i) => <g key={i} className={styles.boxItem} role="button" tabIndex={0}
         aria-label={`${p.label} symbol ${i + 1}`} aria-pressed={selected === i} onClick={() => onSelect(i)}
         onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(i); } }}>
-        <path d={`${rectPath(p.outer)}${rectPath(p.cell)}`} fillRule="evenodd" className={styles.marginArea} />
+        {boxes && <><path d={`${rectPath(p.outer)}${rectPath(p.cell)}`} fillRule="evenodd" className={styles.marginArea} />
         <path d={`${rectPath(p.cell)}${rectPath(p.content)}`} fillRule="evenodd" className={styles.paddingArea} />
         <rect {...p.outer} className={styles.marginOutline} />
         <rect {...p.cell} className={styles.cellOutline} />
         <rect x={p.x} y={p.y} width={p.width} height={p.height} className={styles.glyphOutline}
-          transform={`rotate(${p.angle} ${p.x + p.width / 2} ${p.y + p.height / 2})`} />
+          transform={`rotate(${p.angle} ${p.x + p.width / 2} ${p.y + p.height / 2})`} /></>}
+        {references && <rect {...p.reference} className={styles.referenceOutline} />}
         <rect {...p.outer} fill="transparent" className={styles.boxTarget} />
       </g>)}
     </g>
   </svg>;
 }
 
-export function BoxInspector({ placement: p }: { placement?: WritingPlacement }) {
+export function BoxInspector({ placement: p, boxes = true, references = false }: { placement?: WritingPlacement; boxes?: boolean; references?: boolean }) {
   return <div className={styles.boxInfo}>
-    <div className={styles.boxLegend} aria-label="Box legend"><span>Glyph</span><span>Cell</span><span>Padding</span><span>Margin</span></div>
+    <div className={styles.boxLegend} aria-label="Box legend">{boxes && <><span>Glyph</span><span>Cell</span><span>Padding</span><span>Margin</span></>}{references && <span className={styles.referenceLegend}>Reference bounds</span>}</div>
     {p && <div className={styles.inspector} aria-label="Selected symbol">
       <Latex value={p.glyph?.latex ?? p.label} />
       <dl>
         <div><dt>Glyph</dt><dd>{dimensions(p)} · {n(p.angle)}°</dd></div>
         <div><dt>Cell</dt><dd>{dimensions(p.cell)}</dd></div>
+        {references && <div><dt>Reference bounds</dt><dd>{dimensions(p.reference)} · {n(p.reference.x)}, {n(p.reference.y)} px</dd></div>}
         <div><dt>Position</dt><dd>{n(p.cell.x)}, {n(p.cell.y)} px</dd></div>
         <div><dt>Padding · T R B L</dt><dd>{sides.map((side) => n(p.padding[side])).join(" / ")} px</dd></div>
         <div><dt>Margin · T R B L</dt><dd>{sides.map((side) => n(p.margin[side])).join(" / ")} px</dd></div>

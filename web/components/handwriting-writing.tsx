@@ -6,6 +6,7 @@ import { ArrowLeft, Download, LoaderCircle, Shuffle } from "lucide-react";
 import { listDatasets, loadWritingDataset, type DatasetSummary } from "@/lib/handwriting-library";
 import { DEFAULT_WRITING_SETTINGS, MAX_WRITING_LENGTH, type WritingDataset, type WritingResult } from "@/lib/handwriting-writing";
 import { analysisLabels } from "@/lib/handwriting-analysis";
+import { solutionExamples } from "@/lib/writing-examples";
 import { Latex } from "./handwriting-review";
 import { BoxInspector, InsetControls, SymbolBoxes } from "./handwriting-writing-boxes";
 import shared from "./handwriting-review.module.css";
@@ -13,7 +14,8 @@ import styles from "./handwriting-writing.module.css";
 
 const imageSource = (svg: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 const message = (error: unknown) => error instanceof Error ? error.message : "Something went wrong. Try again.";
-const latexPresets = [
+const latexPresets: Array<{ name: string; value: string; answer?: boolean }> = [
+  ...solutionExamples.map(example => ({ ...example, answer: true })),
   { name: "Simple fraction", value: String.raw`\frac{x}{e}=x` },
   { name: "Powers and fractions", value: String.raw`\frac{x^2+1}{y}=x_1` },
   { name: "Trigonometry", value: String.raw`\sin x+\cos y=1` },
@@ -30,6 +32,8 @@ export function HandwritingWriting() {
   const [mode, setMode] = useState<"text" | "latex">("latex");
   const [source, setSource] = useState("\\frac{dx}{dy}=x^2+\\sin x");
   const [settings, setSettings] = useState(DEFAULT_WRITING_SETTINGS);
+  const [showReferences, setShowReferences] = useState(false);
+  const [readableAnswer, setReadableAnswer] = useState(false);
   const [showBoxes, setShowBoxes] = useState(false), [selectedBox, setSelectedBox] = useState<number | null>(null);
   const [result, setResult] = useState<WritingResult | null>(null), [rendering, setRendering] = useState(false), [exporting, setExporting] = useState(false);
   const [width, setWidth] = useState(800), surface = useRef<HTMLDivElement>(null), active = useRef(false), catalogRequest = useRef(0);
@@ -71,13 +75,13 @@ export function HandwritingWriting() {
       try {
         const { renderWriting } = await import("@/lib/handwriting-writing-renderer");
         if (cancelled) return;
-        const value = renderWriting(source, mode, data?.glyphs ?? [], settings, width);
+        const value = renderWriting(source, mode, data?.glyphs ?? [], settings, width, { readable: readableAnswer });
         if (!cancelled) setResult(value);
       } catch (err) { if (!cancelled) { setRenderError(message(err)); setResult(null); } }
       finally { if (!cancelled) setRendering(false); }
     }, 160);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [source, mode, data, settings, width]);
+  }, [source, mode, data, settings, width, readableAnswer]);
 
   async function download() {
     if (!result || rendering || exporting) return;
@@ -103,7 +107,7 @@ export function HandwritingWriting() {
           maxLength={MAX_WRITING_LENGTH} rows={3} spellCheck={false} onChange={(event) => setSource(event.target.value)} />
         {mode === "latex" && <select className={styles.presets} aria-label="LaTeX presets" value="" onChange={(event) => {
           const preset = latexPresets.find((item) => item.name === event.target.value);
-          if (preset) setSource(preset.value);
+          if (preset) { setSource(preset.value); setReadableAnswer(preset.answer === true); }
         }}>
           <option value="" disabled>Examples</option>
           {latexPresets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name}</option>)}
@@ -122,15 +126,15 @@ export function HandwritingWriting() {
           <div className={styles.paper} aria-busy={rendering}>{result?.preview && <img src={imageSource(result.preview.svg)} width={result.preview.width} height={result.preview.height} alt="LaTeX preview" />}</div>
         </section>}
         <section className={styles.preview} aria-label="Handwriting result">
-          <div className={styles.outputHeading}><div><h2>Handwriting</h2><label className={styles.boxToggle}><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />Boxes</label></div><div>
+          <div className={styles.outputHeading}><div><h2>Handwriting</h2><label className={styles.boxToggle}><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />Boxes</label><label className={styles.boxToggle}><input type="checkbox" checked={showReferences} onChange={(e) => setShowReferences(e.target.checked)} />Reference bounds</label></div><div>
             {(rendering || (datasetId && !data && !error)) && <LoaderCircle className={shared.spinner} size={17} role="status" aria-label="Rendering" />}
             <button className={shared.iconButton} aria-label="Download PNG" title="Download PNG" onClick={() => void download()} disabled={!result || !data?.glyphs.length || rendering || exporting}><Download size={18} /></button>
           </div></div>
           <div className={styles.paper} aria-busy={rendering}>{result && !!data?.glyphs.length && <div className={styles.resultCanvas} style={{ width: result.width, height: result.height }}>
             <img src={imageSource(result.svg)} width={result.width} height={result.height} alt="Handwriting result" />
-            {showBoxes && !rendering && <SymbolBoxes result={result} selected={selectedBox} onSelect={setSelectedBox} />}
+            {(showBoxes || showReferences) && !rendering && <SymbolBoxes result={result} selected={selectedBox} onSelect={setSelectedBox} boxes={showBoxes} references={showReferences} />}
           </div>}</div>
-          {showBoxes && result && !!data?.glyphs.length && !rendering && <BoxInspector placement={selectedBox === null ? undefined : result.placements[selectedBox]} />}
+          {(showBoxes || showReferences) && result && !!data?.glyphs.length && !rendering && <BoxInspector placement={selectedBox === null ? undefined : result.placements[selectedBox]} boxes={showBoxes} references={showReferences} />}
         </section>
       </div>
       <aside className={styles.sidebar} aria-label="Writing settings">

@@ -1,5 +1,6 @@
 export const CANVAS_AI_TEXT = {
   ru: {
+    solutionLink: "Решение", deleteObject: "Удалить",
     sidebarSettings: "Настройки ИИ",
     petName: "Помощник", petGreeting: "Давай разберёмся вместе",
     ai1Aria: "Решить на канвасе", ai1Title: "Решить на канвасе",
@@ -19,6 +20,7 @@ export const CANVAS_AI_TEXT = {
     retrySave: "Повторить сохранение",
   },
   en: {
+    solutionLink: "Solution", deleteObject: "Delete",
     sidebarSettings: "AI settings",
     petName: "Companion", petGreeting: "Let’s work it out together",
     ai1Aria: "Solve on canvas", ai1Title: "Solve on canvas",
@@ -38,6 +40,7 @@ export const CANVAS_AI_TEXT = {
     retrySave: "Retry saving",
   },
   zh: {
+    solutionLink: "解答", deleteObject: "删除",
     sidebarSettings: "AI 设置",
     petName: "小伙伴", petGreeting: "一起把题目解开吧",
     ai1Aria: "在画布上解题", ai1Title: "在画布上解题",

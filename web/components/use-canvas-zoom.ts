@@ -2,11 +2,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { anchoredCanvasScroll, zoomFromWheel, type ScrollPoint, type Size } from "@/lib/canvas-viewport";
 
-export function useCanvasZoom(fitSize: Size, blocked: () => boolean) {
+export function useCanvasZoom(fitSize: Size, blocked: () => boolean, pageCount = 1) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(1);
   const blockedRef = useRef(blocked); blockedRef.current = blocked;
+  const pageCountRef = useRef(pageCount); pageCountRef.current = pageCount;
   const pending = useRef<ScrollPoint | null>(null);
   const stageSize = { width: fitSize.width * zoom, height: fitSize.height * zoom };
   const previousSize = useRef(stageSize);
@@ -18,7 +19,7 @@ export function useCanvasZoom(fitSize: Size, blocked: () => boolean) {
     // Adapt scrolling when the fitted paper dimensions change, retaining the zoom level.
     if (!pending.current && previous.width > 0 && (previous.width !== stageSize.width || previous.height !== stageSize.height)) {
       pending.current = anchoredCanvasScroll(previous, stageSize, { width: viewport.clientWidth, height: viewport.clientHeight },
-        { left: viewport.scrollLeft, top: viewport.scrollTop }, { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 });
+        { left: viewport.scrollLeft, top: viewport.scrollTop }, { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 }, pageCountRef.current);
     }
     if (pending.current) {
       viewport.scrollLeft = pending.current.left; viewport.scrollTop = pending.current.top;
@@ -42,7 +43,7 @@ export function useCanvasZoom(fitSize: Size, blocked: () => boolean) {
         { width: fitSize.width * next, height: fitSize.height * next },
         { width: viewport.clientWidth, height: viewport.clientHeight },
         pending.current ?? { left: viewport.scrollLeft, top: viewport.scrollTop },
-        { x: event.clientX - rect.left, y: event.clientY - rect.top });
+        { x: event.clientX - rect.left, y: event.clientY - rect.top }, pageCountRef.current);
       zoomRef.current = next;
       setZoom(next);
     };

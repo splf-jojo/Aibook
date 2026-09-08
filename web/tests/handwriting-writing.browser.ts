@@ -1,6 +1,7 @@
 import { renderWriting, svgDataUrl } from "../lib/handwriting-writing-renderer";
 import { DEFAULT_WRITING_SETTINGS, type WritingGlyph, type WritingResult } from "../lib/handwriting-writing";
 import { renderCanvasHandwriting } from "../lib/canvas-handwriting-renderer";
+import { solutionExamples } from "../lib/writing-examples";
 
 // Import from a temporary client test page and call after mount. These checks
 // intentionally require the browser's SVG getBBox/getScreenCTM implementation.
@@ -92,6 +93,24 @@ export async function runWritingBrowserChecks() {
   assert(strict.missing.includes("T") && strict.fontFallback === undefined, "Writing default retains strict prose coverage");
   passed.push("unchanged strict Writing defaults");
 
+  for (const example of solutionExamples) {
+    const result = renderWriting(example.value, "latex", glyphs, settings, 690, { readable: true });
+    checkBounds(result);
+    const doc = svg(result);
+    assert(!doc.querySelector("[data-missing]"), `${example.name}: complete readable answer`);
+    assert(doc.querySelectorAll('[data-mml-node="mtext"]').length >= 2, `${example.name}: prose is retained`);
+    assert(result.height > settings.size * 4, `${example.name}: full multi-line solution`);
+    assert(doc.querySelector('rect[width="100%"]')?.getAttribute("fill") === "white", "Writing answer exports a white page");
+  }
+  const reference = renderWriting(String.raw`\sin x-\cos x+1`, "latex",
+    [...glyphs, ...["\\sin", "\\cos"].map(latex => ({ latex, medoidId: latex, image, width: 60, height: 30 }))], settings, 690);
+  const minus = reference.placements.find(p => p.label === "−")!;
+  assert(minus.reference.height < minus.cell.height / 5, "Minus exposes its actual thin fitting reference");
+  assert(reference.placements.find(p => p.label === "sin")!.reference.height > reference.placements.find(p => p.label === "cos")!.reference.height,
+    "Reference overlay retains the different printed function heights");
+  assert(!reference.svg.includes("Reference bounds"), "Reference inspection does not leak into exports");
+  passed.push("four complete worked examples; original fitting reference geometry");
+
   const bitmap = new Image(); bitmap.src = svgDataUrl(mixed.svg); await bitmap.decode();
   const canvas = document.createElement("canvas"); canvas.width = Math.ceil(mixed.width); canvas.height = Math.ceil(mixed.height);
   const context = canvas.getContext("2d")!; context.drawImage(bitmap, 0, 0);
@@ -109,12 +128,12 @@ export async function runWritingBrowserChecks() {
   canvas.width = png.width; canvas.height = png.height; context.drawImage(png, 0, 0);
   const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
   assert(pixels[3] === 0, "Final PNG keeps transparent padding");
-  let blueInk = false;
+  let blackInk = false;
   for (let i = 0; i < pixels.length; i += 4) if (pixels[i + 3] === 255) {
-    assert(pixels[i] === 36 && pixels[i + 1] === 86 && pixels[i + 2] === 166, "Final ink is consistently blue"); blueInk = true;
+    assert(pixels[i] === 0 && pixels[i + 1] === 0 && pixels[i + 2] === 0, "Final ink is consistently black"); blackInk = true;
   }
-  assert(blueInk, "Final PNG has opaque ink");
+  assert(blackInk, "Final PNG has opaque ink");
   assert(JSON.parse(JSON.stringify(rendered)).dataUrl === rendered.dataUrl, "Saved image round trips independently of the profile");
-  passed.push("canvas PNG wrapper: reproducible pixels, transparent background, blue ink and profile snapshot");
+  passed.push("canvas PNG wrapper: reproducible pixels, transparent background, black ink and profile snapshot");
   return { passed, count: passed.length };
 }

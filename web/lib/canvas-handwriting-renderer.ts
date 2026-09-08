@@ -14,7 +14,7 @@ export async function renderCanvasHandwriting(latex: string, dataset: WritingDat
   const settings = { ...DEFAULT_WRITING_SETTINGS, size: fontSize, variation: 8, seed: formulaSeed(latex) };
   const snapshot: HandwritingSnapshot = { schemaVersion: 1, rendererVersion: 1, datasetId: dataset.id,
     datasetName: dataset.name, sourceVersion: dataset.sourceVersion, computedAt: dataset.computedAt,
-    settings, color: "#2456a6", medoids: [], fontSymbols: [], fontOnly: false };
+    settings, color: "#000000", medoids: [], fontSymbols: [], fontOnly: false };
   if (latex.length > MAX_WRITING_LENGTH) {
     return { ...await renderLatexImage(latex, fontSize, maxWidth), handwriting: { ...snapshot, fontOnly: true, fallbackReason: "length" } };
   }

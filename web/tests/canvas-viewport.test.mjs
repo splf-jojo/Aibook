@@ -29,3 +29,11 @@ test("touchpad/wheel zoom is reciprocal, handles line deltas, and stops at bound
   assert.equal(zoomFromWheel(MIN_CANVAS_ZOOM, 1000, 0), MIN_CANVAS_ZOOM);
   assert.equal(zoomFromWheel(1, 0, 0), 1);
 });
+
+test("zoom on a later page holds its local coordinate, including fixed page gaps", () => {
+  const viewport = { width: 700, height: 600 }, before = { width: 794, height: 1123 }, after = { width: 1588, height: 2246 };
+  const cursor = { x: 250, y: 200 }, scroll = { left: 90, top: 2 * (1123 + 16) + 400 };
+  const result = anchoredCanvasScroll(before, after, viewport, scroll, cursor, 4);
+  assert.equal((scroll.top + cursor.y - 2 * (1123 + 16)) / 1123, (result.top + cursor.y - 2 * (2246 + 16)) / 2246);
+  assert.deepEqual(anchoredCanvasScroll(after, before, viewport, result, cursor, 4), scroll);
+});

@@ -11,12 +11,15 @@ export function zoomFromWheel(zoom: number, deltaY: number, deltaMode: number) {
 }
 
 /** Keep the same paper point under the cursor, subject to the scroll bounds. */
-export function anchoredCanvasScroll(before: Size, after: Size, viewport: Size, scroll: ScrollPoint, cursor: { x: number; y: number }): ScrollPoint {
+export function anchoredCanvasScroll(before: Size, after: Size, viewport: Size, scroll: ScrollPoint, cursor: { x: number; y: number }, pageCount = 1): ScrollPoint {
   const beforeWidth = Math.max(viewport.width, before.width + CANVAS_SIDE_PADDING * 2);
   const afterWidth = Math.max(viewport.width, after.width + CANVAS_SIDE_PADDING * 2);
   const oldLeft = (beforeWidth - before.width) / 2, newLeft = (afterWidth - after.width) / 2;
   const left = newLeft + (scroll.left + cursor.x - oldLeft) * after.width / before.width - cursor.x;
-  const top = (scroll.top + cursor.y) * after.height / before.height - cursor.y;
+  const gap = 16, page = Math.min(pageCount - 1, Math.floor((scroll.top + cursor.y) / (before.height + gap)));
+  const onPage = scroll.top + cursor.y - page * (before.height + gap);
+  const top = page * (after.height + gap) + onPage * after.height / before.height - cursor.y;
+  const stackHeight = after.height * pageCount + gap * (pageCount - 1);
   return { left: Math.max(0, Math.min(afterWidth - viewport.width, left)),
-    top: Math.max(0, Math.min(Math.max(viewport.height, after.height + CANVAS_BOTTOM_PADDING) - viewport.height, top)) };
+    top: Math.max(0, Math.min(Math.max(viewport.height, stackHeight + CANVAS_BOTTOM_PADDING) - viewport.height, top)) };
 }

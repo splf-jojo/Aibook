@@ -2,12 +2,15 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Copy } from "lucide-react";
 import { CanvasPet, type CanvasPetMood } from "./canvas-pet";
+import { parseSolutionMessage } from "@/lib/canvas-solution-link";
 import styles from "./canvas-companion.module.css";
 
 type Message = { id: string; role: "user" | "assistant"; content: string; image_data_url?: string | null };
 type Labels = { petName: string; petGreeting: string; emptyChat: string; selectedArea: string; copyResponse: string; processing: string };
-export function CanvasConversation({ messages, chatId, pending, mood, labels }: {
+export function CanvasConversation({ messages, chatId, pending, mood, labels, onSolutionClick, canFocusSolution }: {
   messages: Message[]; chatId: string | null; pending: boolean; mood: CanvasPetMood; labels: Labels;
+  onSolutionClick: (canvasId: string, solutionId: string) => void;
+  canFocusSolution: (canvasId: string, solutionId: string) => boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null), frameRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null), petRef = useRef<HTMLDivElement>(null);
@@ -63,17 +66,21 @@ export function CanvasConversation({ messages, chatId, pending, mood, labels }: 
         <div className={styles.welcomePet}><CanvasPet /></div>
       </div>}
       <div className={styles.messages} ref={messagesRef}>
-        {messages.map(message => message.role === "user" ? <div className={styles.userMessage} key={message.id}>
+        {messages.map(message => {
+          const link = message.role === "assistant" ? parseSolutionMessage(message.content) : null;
+          const plainText = link ? link.before + link.label + link.after : message.content;
+          return message.role === "user" ? <div className={styles.userMessage} key={message.id}>
           {message.image_data_url && <img alt={labels.selectedArea} src={message.image_data_url} />}
           <p>{message.content}</p>
         </div> : <article aria-label={labels.petName} className={styles.reply} key={message.id}>
           <div className={styles.bubble} data-companion-bubble={message.id} data-companion-message={tail.messageId === message.id || undefined}>
-            <div className={styles.responseText}>{message.content}</div>
+            <div className={styles.responseText}>{link ? <>{link.before}<button className={styles.solutionLink} type="button"
+              disabled={!canFocusSolution(link.canvasId, link.solutionId)} onClick={() => onSolutionClick(link.canvasId, link.solutionId)}>{link.label}</button>{link.after}</> : message.content}</div>
             {message.content && <div className={styles.replyActions}>
-              <button aria-label={labels.copyResponse} onClick={() => void navigator.clipboard.writeText(message.content).catch(() => {})} className={styles.iconButton} title={labels.copyResponse} type="button"><Copy aria-hidden="true" size={13} strokeWidth={1.7} /></button>
+              <button aria-label={labels.copyResponse} onClick={() => void navigator.clipboard.writeText(plainText).catch(() => {})} className={styles.iconButton} title={labels.copyResponse} type="button"><Copy aria-hidden="true" size={13} strokeWidth={1.7} /></button>
             </div>}
           </div>
-        </article>)}
+        </article>; })}
         {pending && <div aria-label={labels.processing} role="status" className={`${styles.reply} ${styles.pending}`}>
           <div className={styles.bubble} data-companion-bubble="pending" data-companion-message={tail.messageId === "pending" || undefined}><div aria-hidden="true" className={styles.typing}><span /><span /><span /></div></div>
         </div>}

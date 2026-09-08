@@ -1,10 +1,18 @@
+"use client";
+import { useRef } from "react";
 import styles from "./canvas-pet.module.css";
 
 export type CanvasPetMood = "idle" | "thinking" | "writing" | "ready";
 
 export function CanvasPet({ mood = "idle", className = "" }: { mood?: CanvasPetMood; className?: string }) {
+  const eyesRef = useRef<SVGGElement>(null);
+  const blink = () => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    eyesRef.current?.animate([{ transform: "scaleY(1)" }, { transform: "scaleY(.12)", offset: .5 }, { transform: "scaleY(1)" }],
+      { duration: 260, easing: "ease-in-out" });
+  };
   return (
-    <svg aria-hidden="true" className={`${styles.pet} ${className}`} data-mood={mood} viewBox="0 0 104 104" fill="none">
+    <svg aria-hidden="true" className={`${styles.pet} ${className}`} data-mood={mood} viewBox="0 0 104 104" fill="none" onPointerEnter={blink}>
       <ellipse className={styles.shadow} cx="51" cy="92" rx="29" ry="4" fill="#1e3a5f" opacity=".09" />
       <g className={styles.body}>
         <path d="M78 69c14-11 19 1 10 8-4 3-8 2-12 0" fill="#9bbcff" stroke="#304867" strokeWidth="2.5" strokeLinecap="round" />
@@ -13,7 +21,7 @@ export function CanvasPet({ mood = "idle", className = "" }: { mood?: CanvasPetM
         <path d="M25 21c-1 4 0 9 2 13l6-6-8-7Zm49 0-9 8 7 6c2-5 3-10 2-14Z" fill="#adc9ff" />
         <path d="M26 68c3 11 12 16 26 16s22-5 25-16c-13 7-36 7-51 0Z" fill="#e8effc" />
         <g className={styles.face}>
-          <g className={styles.eyes} fill="#304867">
+          <g className={styles.eyes} fill="#304867" ref={eyesRef}>
             <rect x="34" y="45" width="6" height="10" rx="3" />
             <rect x="61" y="45" width="6" height="10" rx="3" />
           </g>
