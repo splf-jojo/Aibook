@@ -237,6 +237,7 @@ function Auth({
 export function CanvasApp() {
   const [token, setToken] = useState<string | null>(null);
   const [activeCanvas, setActiveCanvas] = useState<CanvasRecord | null>(null);
+  const [libraryGroup, setLibraryGroup] = useState("all");
   const [ready, setReady] = useState(false);
   const [theme, setTheme] = useState<AppTheme>("light");
   const [language, setLanguage] = useState<AppLanguage>("en");
@@ -283,6 +284,7 @@ export function CanvasApp() {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     setToken(null);
     setActiveCanvas(null);
+    setLibraryGroup("all");
   }, []);
 
   const authenticated = useCallback((nextToken: string) => {
@@ -303,6 +305,8 @@ export function CanvasApp() {
     return (
       <CanvasLibrary
         appTheme={theme}
+        groupFilter={libraryGroup}
+        onGroupFilterChange={setLibraryGroup}
         language={language}
         onLanguageChange={changeLanguage}
         onLogout={logout}

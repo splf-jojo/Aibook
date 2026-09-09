@@ -1,7 +1,7 @@
 "use client";
 
-import { ArrowUpRight, ChevronRight, MoreHorizontal, Plus, Settings, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { ArrowUpRight, MoreHorizontal, PanelLeft, Plus, Settings, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { CanvasPreview } from "./canvas-preview";
 import styles from "./canvas-library.module.css";
 
@@ -23,7 +23,7 @@ const COPY = {
     operationFailed: "Не удалось выполнить действие. Попробуйте ещё раз.",
     create: "Новый канвас", notes: "Заметки", actions: "Действия", retry: "Повторить",
     previewUnavailable: "Превью недоступно", loading: "Загрузка…", handwriting: "Почерк",
-    noteCount: "Заметок:", group: "Группа", save: "Сохранить", name: "Название",
+    groups: "Группы", openSidebar: "Открыть группы", closeSidebar: "Закрыть группы", save: "Сохранить", name: "Название",
     untitled: "Новый канвас",
     open: "Открыть",
     rename: "Переименовать",
@@ -46,7 +46,7 @@ const COPY = {
     operationFailed: "Could not complete the action. Please try again.",
     create: "New canvas", notes: "Notes", actions: "Actions", retry: "Retry",
     previewUnavailable: "Preview unavailable", loading: "Loading…", handwriting: "Handwriting",
-    noteCount: "Notes:", group: "Group", save: "Save", name: "Name",
+    groups: "Groups", openSidebar: "Open groups", closeSidebar: "Close groups", save: "Save", name: "Name",
     untitled: "New canvas",
     open: "Open",
     rename: "Rename",
@@ -69,7 +69,7 @@ const COPY = {
     operationFailed: "操作失败，请重试。",
     create: "新画布", notes: "笔记", actions: "操作", retry: "重试",
     previewUnavailable: "预览不可用", loading: "加载中…", handwriting: "笔迹",
-    noteCount: "笔记：", group: "分组", save: "保存", name: "名称",
+    groups: "分组", openSidebar: "打开分组", closeSidebar: "关闭分组", save: "保存", name: "名称",
     untitled: "新画布",
     open: "打开",
     rename: "重命名",
@@ -90,6 +90,8 @@ const COPY = {
 
 export function CanvasLibrary({
   appTheme,
+  groupFilter,
+  onGroupFilterChange: setGroupFilter,
   language,
   onLanguageChange,
   onLogout,
@@ -98,6 +100,8 @@ export function CanvasLibrary({
   token,
 }: {
   appTheme: AppTheme;
+  groupFilter: string;
+  onGroupFilterChange: Dispatch<SetStateAction<string>>;
   language: AppLanguage;
   onLanguageChange: (language: AppLanguage) => void;
   onLogout: () => void;
@@ -114,7 +118,8 @@ export function CanvasLibrary({
   const [titleDraft, setTitleDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [groups, setGroups] = useState<NoteGroup[]>([]);
-  const [groupFilter, setGroupFilter] = useState("all");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const workspaceRef = useRef<HTMLDivElement>(null);
   const [groupEditor, setGroupEditor] = useState<NoteGroup | "new" | null>(null);
   const [groupName, setGroupName] = useState("");
   const [groupBusy, setGroupBusy] = useState(false);
@@ -125,8 +130,10 @@ export function CanvasLibrary({
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
     .map((group, index) => [group.id, groupColor(index)])), [groups]);
   const text = COPY[language];
-  const visibleCanvases = canvases.filter(canvas => groupFilter === "all" ? !canvas.groupId : canvas.groupId === groupFilter);
+  const visibleCanvases = canvases.filter(canvas => groupFilter === "all" ||
+    (groupFilter === "ungrouped" ? !canvas.groupId : canvas.groupId === groupFilter));
   const selectedGroup = groups.find((group) => group.id === groupFilter);
+  const viewTitle = selectedGroup?.name ?? (groupFilter === "ungrouped" ? text.ungrouped : text.all);
   const busy = creating || groupBusy || busyId !== null;
 
   const handleAuthFailure = useCallback(
@@ -153,17 +160,26 @@ export function CanvasLibrary({
       setCanvases((await response.json()) as CanvasSummary[]);
       const nextGroups = await groupResponse.json() as NoteGroup[];
       setGroups(nextGroups);
-      setGroupFilter((current) => nextGroups.some((group) => group.id === current) ? current : "all");
+      setGroupFilter((current) => current === "ungrouped" || nextGroups.some((group) => group.id === current) ? current : "all");
     } catch {
       setFailed(true);
     } finally {
       setLoading(false);
     }
-  }, [handleAuthFailure, token]);
+  }, [handleAuthFailure, token, setGroupFilter]);
 
   useEffect(() => {
     void loadCanvases();
   }, [loadCanvases]);
+
+  useEffect(() => { workspaceRef.current?.scrollTo(0, 0); }, [groupFilter]);
+
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 721px)");
+    const closeDrawer = () => { if (desktop.matches) setSidebarOpen(false); };
+    desktop.addEventListener("change", closeDrawer);
+    return () => desktop.removeEventListener("change", closeDrawer);
+  }, []);
 
   const createCanvas = async () => {
     if (busy) return;
@@ -317,6 +333,7 @@ export function CanvasLibrary({
     updatedAt={canvas?.updatedAt} token={token} unavailable={text.previewUnavailable}
     loadingLabel={text.loading} onAuthFailure={onLogout} />;
   const editGroup = (group: NoteGroup | "new") => {
+    setSidebarOpen(false);
     setGroupName(group === "new" ? "" : group.name); setGroupEditor(group); setActionFailed(false);
   };
   const askDelete = (kind: "canvas" | "group", id: string, title: string) => {
@@ -328,26 +345,48 @@ export function CanvasLibrary({
     <button type="button" onClick={() => editGroup(group)}>{text.rename}</button>
     <button type="button" className={styles.destructive} onClick={() => askDelete("group", group.id, group.name)}>{text.deleteGroup}</button>
   </CardActions>;
+  const selectGroup = (id: string) => { setGroupFilter(id); setSidebarOpen(false); setActionFailed(false); };
+  const sidebarNavigation = <nav className={styles.sidebarNavigation} aria-label={text.notes}>
+    <div className={styles.libraryViews}>
+      {[{ id: "all", name: text.all }, { id: "ungrouped", name: text.ungrouped }].map(view => <button type="button" key={view.id}
+        className={styles.navButton} aria-current={groupFilter === view.id ? "page" : undefined}
+        onClick={() => selectGroup(view.id)}>{view.name}</button>)}
+    </div>
+    <div className={styles.groupHeading}><h2>{text.groups}</h2>
+      <button type="button" className={styles.iconButton} aria-label={text.newGroup} title={text.newGroup}
+        disabled={busy || loading || failed} onClick={() => editGroup("new")}><Plus size={17} aria-hidden="true" /></button>
+    </div>
+    <div className={styles.groupList}>
+      {groups.map(group => <button type="button" key={group.id} className={`${styles.navButton} ${styles.groupButton}`}
+        style={{ "--group-color": groupColors.get(group.id) } as CSSProperties} title={group.name}
+        aria-current={groupFilter === group.id ? "page" : undefined} onClick={() => selectGroup(group.id)}>
+        <span className={styles.groupMarker} aria-hidden="true" /><span className={styles.groupName}>{group.name}</span>
+      </button>)}
+    </div>
+  </nav>;
+  const sidebarSettings = <button type="button" className={styles.sidebarSettings}
+    onClick={() => { setSidebarOpen(false); setSettingsOpen(true); }}><Settings size={18} strokeWidth={1.6} aria-hidden="true" />{text.settings}</button>;
 
   return <main className={styles.library} data-theme={appTheme}>
-    <div className={styles.container}>
-      <header className={styles.header}>
-        <h1><button type="button" className={styles.wordmark} onClick={() => setGroupFilter("all")}>AIbook<span>.</span></button></h1>
-        <button type="button" className={styles.iconButton} aria-label={text.settings} title={text.settings}
-          onClick={() => setSettingsOpen(true)}><Settings size={20} strokeWidth={1.6} aria-hidden="true" /></button>
+    <aside className={styles.sidebar}>
+      <div className={styles.sidebarHeader}><h1><button type="button" className={styles.wordmark} onClick={() => selectGroup("all")}>AIbook</button></h1></div>
+      {sidebarNavigation}
+      <div className={styles.sidebarFooter}>{sidebarSettings}</div>
+    </aside>
+    <div className={styles.workspace} ref={workspaceRef}>
+      <div className={styles.container}>
+      <header className={styles.toolbar}>
+        <div className={styles.viewHeading}>
+          <button type="button" className={`${styles.iconButton} ${styles.mobileMenu}`} aria-label={text.openSidebar}
+            aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(true)}><PanelLeft size={20} aria-hidden="true" /></button>
+          <h2 tabIndex={-1} data-library-heading>{viewTitle}</h2>
+        </div>
+        {selectedGroup && groupMenu(selectedGroup)}
       </header>
-      <div className={styles.toolbar}>
-        <nav className={styles.breadcrumb} aria-label={text.notes}>
-          <button type="button" onClick={() => setGroupFilter("all")} aria-current={!selectedGroup ? "page" : undefined}>{text.notes}</button>
-          {selectedGroup && <><ChevronRight size={14} aria-hidden="true" /><span className={styles.currentGroup} aria-current="page">{selectedGroup.name}</span></>}
-        </nav>
-        {selectedGroup ? groupMenu(selectedGroup) : <button type="button" className={styles.quietButton} disabled={busy || loading || failed}
-          onClick={() => editGroup("new")}><Plus size={16} aria-hidden="true" />{text.newGroup}</button>}
-      </div>
 
       {!dialogOpen && actionError}
       {failed && <div className={styles.error} role="alert">{text.failed}<button type="button" onClick={() => void loadCanvases()}>{text.retry}</button></div>}
-      <section className={styles.grid} aria-label={selectedGroup?.name ?? text.notes} aria-busy={loading}>
+      <section className={styles.grid} aria-label={viewTitle} aria-busy={loading}>
         <article className={styles.card}>
           <button type="button" className={styles.createCard} onClick={() => void createCanvas()}
             disabled={busy || loading || failed} aria-label={text.create} aria-busy={creating}>
@@ -356,22 +395,6 @@ export function CanvasLibrary({
           </button>
         </article>
         {loading ? Array.from({ length: 4 }, (_, index) => <div key={index} className={styles.skeleton} aria-hidden="true" />) : <>
-          {groupFilter === "all" && groups.map(group => {
-            const notes = canvases.filter(canvas => canvas.groupId === group.id);
-            return <article key={group.id} className={styles.card} style={{ "--cover": groupColors.get(group.id) } as CSSProperties}>
-              <button type="button" className={`${styles.paper} ${styles.groupPaper}`} aria-label={`${text.open}: ${group.name} (${text.group})`}
-                onClick={() => setGroupFilter(group.id)}>
-                {preview(notes[0])}
-              </button>
-              <div className={styles.cardCaption}>
-                <div className={styles.cardInfo}>
-                  <button type="button" className={styles.cardTitle} onClick={() => setGroupFilter(group.id)} title={group.name}>{group.name}</button>
-                  <p className={styles.metadata}>{text.noteCount} {notes.length}</p>
-                </div>
-                {groupMenu(group)}
-              </div>
-            </article>;
-          })}
           {visibleCanvases.map(canvas => <article key={canvas.id} className={styles.card}>
             <button type="button" className={styles.paper} aria-label={`${text.open}: ${canvas.title}`}
               disabled={busy} onClick={() => void openCanvas(canvas.id)}>{preview(canvas)}</button>
@@ -389,7 +412,13 @@ export function CanvasLibrary({
           </article>)}
         </>}
       </section>
+      </div>
     </div>
+
+    {sidebarOpen && <LibraryDialog title="AIbook" closeLabel={text.closeSidebar} className={styles.sidebarDialog} onClose={() => setSidebarOpen(false)}>
+      {sidebarNavigation}
+      <div className={styles.sidebarFooter}>{sidebarSettings}</div>
+    </LibraryDialog>}
 
     {settingsOpen && <LibraryDialog title={text.settings} closeLabel={text.closeSettings} onClose={() => setSettingsOpen(false)}>
       <fieldset className={styles.setting}><legend>{text.theme}</legend><div className={styles.segmented}>
@@ -445,8 +474,8 @@ export function CanvasLibrary({
 
 // Stable during renames/reordering; deliberately not persisted or sent to the API.
 function groupColor(index: number) {
-  const palette = ["#a76550", "#788466", "#b79552", "#8a748b", "#5e8b8a", "#b97982", "#8d806b", "#777a9c"];
-  return palette[index] ?? `hsl(${(index * 137.508) % 360} 24% 49%)`;
+  const palette = ["#9064ce", "#288d76", "#cb8729", "#c65f86", "#508ab5", "#ae6c4c", "#839844", "#7678c6"];
+  return palette[index] ?? `hsl(${(index * 137.508) % 360} 48% 52%)`;
 }
 
 function CardActions({ label, children, disabled }: { label: string; children: ReactNode; disabled: boolean }) {
@@ -475,8 +504,8 @@ function CardActions({ label, children, disabled }: { label: string; children: R
   </details>;
 }
 
-function LibraryDialog({ title, closeLabel, children, onClose, busy = false }: {
-  title: string; closeLabel: string; children: ReactNode; onClose: () => void; busy?: boolean;
+function LibraryDialog({ title, closeLabel, children, onClose, busy = false, className = "" }: {
+  title: string; closeLabel: string; children: ReactNode; onClose: () => void; busy?: boolean; className?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -489,10 +518,10 @@ function LibraryDialog({ title, closeLabel, children, onClose, busy = false }: {
     return () => {
       dialog?.close();
       if (previousFocus?.isConnected) previousFocus.focus();
-      else document.querySelector<HTMLButtonElement>("main nav button")?.focus();
+      else document.querySelector<HTMLElement>("[data-library-heading]")?.focus();
     };
   }, []);
-  return <dialog ref={ref} className={styles.dialog} aria-label={title} onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
+  return <dialog ref={ref} className={`${styles.dialog} ${className}`} aria-label={title} onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
     onClick={event => { if (event.target === event.currentTarget && !busy) {
       const bounds = event.currentTarget.getBoundingClientRect();
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose();
