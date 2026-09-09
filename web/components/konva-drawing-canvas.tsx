@@ -9,6 +9,10 @@ import {
   Check,
   Copy,
   CopyPlus,
+  Scissors,
+  ScanLine,
+  Undo2,
+  Redo2,
   Eraser,
   ImagePlus,
   MessageSquarePlus,
@@ -43,6 +47,9 @@ import {
 } from "react-konva";
 
 import { API_URL, apiHeaders, type CanvasRecord, type CanvasPage } from "@/lib/canvas-api";
+import { CanvasEditHistory, intersectRect, subtractRect, resizeSelection } from "@/lib/canvas-editing";
+import { captureFragment } from "@/lib/canvas-fragment";
+import { CANVAS_EDITING_TEXT } from "@/lib/canvas-editing-text";
 import { PdfPageBackground } from "@/components/pdf-page-background";
 import { findSolutionSpace } from "@/lib/solution-placement";
 import { CANVAS_AI_TEXT } from "@/lib/canvas-ai-text";
@@ -59,6 +66,10 @@ import { SceneElementView, SceneImage, type SceneElement, type StrokeElement, ty
 import viewportStyles from "./canvas-viewport.module.css";
 
 type Tool = "brush" | "eraser" | "select";
+type SelectionMode = "objects" | "region";
+type EditSnapshot = { pages: CanvasPage[]; pageId: string; solutionHistory: SolutionHistoryEntry | null };
+type SelectionGesture = { start: Point; bounds: SelectionRect; corner: number | null; elements: SceneElement[] | null; ids: string[] };
+
 type EraserMode = "normal" | "object";
 type AppLanguage = "ru" | "en" | "zh";
 type Point = { x: number; y: number };
@@ -430,15 +441,6 @@ function sceneElementBounds(element: SceneElement): SelectionRect | null {
   };
 }
 
-function rectsIntersect(first: SelectionRect, second: SelectionRect): boolean {
-  return (
-    first.x <= second.x + second.width &&
-    first.x + first.width >= second.x &&
-    first.y <= second.y + second.height &&
-    first.y + first.height >= second.y
-  );
-}
-
 function rectContainsPoint(rect: SelectionRect, point: Point): boolean {
   return (
     point.x >= rect.x &&
@@ -471,6 +473,22 @@ function moveSceneElement(element: SceneElement, selected: Set<string>, dx: numb
     );
   }
   return { ...element, x: element.x + dx, y: element.y + dy };
+}
+
+function scaleSceneElement(element: SceneElement, from: SelectionRect, to: SelectionRect): SceneElement {
+  const ratio = to.width / from.width;
+  const x = (value: number) => to.x + (value - from.x) * ratio;
+  const y = (value: number) => to.y + (value - from.y) * ratio;
+  if (element.kind === "stroke") {
+    return { ...replaceStrokePoints(element, element.points.map((n, i) => i % 2 ? y(n) : x(n))),
+      strokeWidth: element.strokeWidth * ratio };
+  }
+  if (element.kind === "star") return { ...element, x: x(element.x), y: y(element.y),
+    innerRadius: element.innerRadius * ratio, outerRadius: element.outerRadius * ratio };
+  if (element.kind === "text") return { ...element, x: x(element.x), y: y(element.y),
+    width: element.width * ratio, fontSize: element.fontSize * ratio,
+    ...(element.height === undefined ? {} : { height: element.height * ratio }) };
+  return { ...element, x: x(element.x), y: y(element.y), width: element.width * ratio, height: element.height * ratio };
 }
 
 function snapshotSceneElement(element: SceneElement): SceneElement {
@@ -579,7 +597,13 @@ export function KonvaDrawingCanvas({
   const movePointerRef = useRef<(event: PointerEvent) => void>(() => {});
   const startRef = useRef<Point | null>(null);
   const draggingSelectionRef = useRef(false);
-  const lastDragPointRef = useRef<Point | null>(null);
+  const selectionGestureRef = useRef<SelectionGesture | null>(null);
+  const regionPendingRef = useRef(false);
+  const historyRef = useRef(new CanvasEditHistory<EditSnapshot>());
+  const editBeforeRef = useRef<EditSnapshot | null>(null);
+  const [historyVersion, setHistoryVersion] = useState(0);
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>("objects");
+  const [editError, setEditError] = useState(false);
   const lastEraserPointRef = useRef<Point | null>(null);
   const activeStrokeIdRef = useRef<string | null>(null);
   const sceneClipboardRef = useRef<SceneClipboard | null>(null);
@@ -603,7 +627,10 @@ export function KonvaDrawingCanvas({
   );
   // Pointer events can cross a page before React paints. Keep page data current synchronously.
   const setElements = useCallback((value: SetStateAction<SceneElement[]>) => {
-    const next = typeof value === "function" ? value(elementsRef.current) : value;
+    let next = typeof value === "function" ? value(elementsRef.current) : value;
+    if (next.length === elementsRef.current.length && next.every((element, index) => element === elementsRef.current[index])) {
+      next = elementsRef.current;
+    }
     elementsRef.current = next;
     canvasPagesRef.current = canvasPagesRef.current.map((page, index) => index === activePageIndexRef.current
       ? { ...page, elements: next, appleDrawingData: page.elements === next ? page.appleDrawingData : undefined } : page);
@@ -629,7 +656,12 @@ export function KonvaDrawingCanvas({
   const [loadingChatId, setLoadingChatId] = useState<string | null>(null);
   const [solution, setSolution] = useState<CanvasSolution | null>(null);
   const handwriting = useCanvasHandwriting(token, canvas.id);
-  const [solutionHistory, setSolutionHistory] = useState<SolutionHistoryEntry | null>(null);
+  const [solutionHistory, setSolutionHistoryState] = useState<SolutionHistoryEntry | null>(null);
+  const solutionHistoryRef = useRef<SolutionHistoryEntry | null>(null);
+  const setSolutionHistory = useCallback((entry: SolutionHistoryEntry | null) => {
+    solutionHistoryRef.current = entry;
+    setSolutionHistoryState(entry);
+  }, []);
   const [draftPageIndex, setDraftPageIndex] = useState(0);
   const [inkProgress, setInkProgress] = useState({ step: 0, progress: 0 });
   const [aiError, setAiError] = useState<string | null>(null);
@@ -637,7 +669,7 @@ export function KonvaDrawingCanvas({
   const taskContextRef = useRef(new Map<string, { pageId: string; bounds?: SelectionRect }>());
   const pendingTaskRef = useRef<{ pageId: string; bounds: SelectionRect } | null>(null);
   const canvasAiBusy = sidebarBusy || Boolean(solution);
-  const text = { ...UI_TEXT[language], ...CANVAS_AI_TEXT[language] };
+  const text = { ...UI_TEXT[language], ...CANVAS_AI_TEXT[language], ...CANVAS_EDITING_TEXT[language] };
   const activeChat = aiChats.find((chat) => chat.id === activeChatId) ?? null;
   const petMood: CanvasPetMood = sidebarBusy ? (aiAnimationRef.current !== null ? "writing" : "thinking") : solution ? "ready" : "idle";
   const visiblePageIndex = solution ? draftPageIndex : activePageIndex;
@@ -654,6 +686,37 @@ export function KonvaDrawingCanvas({
   };
 
   useEffect(() => () => { photoRequestRef.current += 1; }, []);
+
+  const editSnapshot = useCallback((): EditSnapshot => ({ pages: canvasPagesRef.current,
+    pageId: canvasPagesRef.current[activePageIndexRef.current].id, solutionHistory: solutionHistoryRef.current }), []);
+  const beginEdit = useCallback(() => { editBeforeRef.current ??= editSnapshot(); }, [editSnapshot]);
+  const finishEdit = useCallback(() => {
+    const before = editBeforeRef.current;
+    editBeforeRef.current = null;
+    if (!before) return;
+    const after = editSnapshot();
+    // Navigation and selection alone never create history entries or discard redo.
+    const changed = JSON.stringify(before.pages) !== JSON.stringify(after.pages);
+    historyRef.current.record(before, after, changed);
+    if (changed) setHistoryVersion(version => version + 1);
+  }, [editSnapshot]);
+
+  const changeEditHistory = useCallback((direction: "undo" | "redo") => {
+    if (canvasAiBusy || photoLoading || aiSubmitRef.current || drawingRef.current) return;
+    const snapshot = historyRef.current[direction]();
+    if (!snapshot) return;
+    const index = Math.max(0, snapshot.pages.findIndex(page => page.id === snapshot.pageId));
+    canvasPagesRef.current = snapshot.pages;
+    activePageIndexRef.current = index;
+    elementsRef.current = snapshot.pages[index].elements as SceneElement[];
+    setElementsState(elementsRef.current);
+    setActivePageIndex(index);
+    setSolutionHistory(snapshot.solutionHistory);
+    setSelectedIds([]); setSelection(null); selectionRef.current = null; regionPendingRef.current = false;
+    setContextMenu(null); setEditError(false);
+    setHistoryVersion(version => version + 1);
+    requestAnimationFrame(() => pageNodesRef.current.get(index)?.scrollIntoView({ block: "nearest" }));
+  }, [canvasAiBusy, photoLoading, setSolutionHistory]);
 
   const addPhoto = async (file: File) => {
     const request = ++photoRequestRef.current;
@@ -689,7 +752,10 @@ export function KonvaDrawingCanvas({
       const height = photo.naturalHeight * scale;
       const bounds = { x: (PAGE_WIDTH - width) / 2, y: (PAGE_HEIGHT - height) / 2, width, height };
       const element: ImageElement = { id: createId(), kind: "image", ...bounds, dataUrl };
+      beginEdit();
       setElements((current) => [...current, element]);
+      finishEdit();
+      regionPendingRef.current = false;
       setTool("select");
       setSelectedIds([element.id]);
       selectionRef.current = bounds;
@@ -777,7 +843,7 @@ export function KonvaDrawingCanvas({
         canvasSaveTimerRef.current = null;
       }
     };
-  }, [elements, queueCanvasSave]);
+  }, [elements, historyVersion, queueCanvasSave]);
 
   useEffect(() => {
     const saveWhenHidden = () => {
@@ -1136,12 +1202,14 @@ export function KonvaDrawingCanvas({
       elements: [...page.elements, ...accepted.pieces.filter((piece) => piece.pageIndex === index).map((piece) => piece.element)],
       appleDrawingData: accepted.pieces.some((piece) => piece.pageIndex === index) ? undefined : page.appleDrawingData,
     }));
+    beginEdit();
     setSolutionHistory(createSolutionHistoryEntry(canvasPagesRef.current, pages, accepted.id));
     canvasPagesRef.current = pages;
     activePageIndexRef.current = draftPageIndex;
     elementsRef.current = pages[draftPageIndex].elements as SceneElement[];
     setActivePageIndex(draftPageIndex);
     setElements(elementsRef.current);
+    finishEdit();
     setSolution(null);
     setSelectedIds([]);
     selectionRef.current = null;
@@ -1160,6 +1228,7 @@ export function KonvaDrawingCanvas({
     if (!await openPage(index)) return;
     const ids = elementsRef.current.filter(element => element.kind === "image" && element.solutionId === solutionId).map(element => element.id);
     const bounds = boundsForElements(elementsRef.current, ids);
+    regionPendingRef.current = false;
     setTool("select"); setSelectedIds(ids); setSelection(bounds); selectionRef.current = bounds;
     requestAnimationFrame(() => {
       const viewport = viewportRef.current, page = pageNodesRef.current.get(index);
@@ -1178,12 +1247,14 @@ export function KonvaDrawingCanvas({
     const pageId = current[activePageIndexRef.current]?.id;
     const result = direction === "undo" ? undoSolution(current, solutionHistory) : redoSolution(current, solutionHistory);
     const index = Math.max(0, result.pages.findIndex(page => page.id === pageId));
+    beginEdit();
     setSolutionHistory(result.entry);
     canvasPagesRef.current = result.pages;
     activePageIndexRef.current = index;
     elementsRef.current = result.pages[index].elements as SceneElement[];
     setActivePageIndex(index);
     setElements(elementsRef.current);
+    finishEdit();
     setSelectedIds([]); setSelection(null); selectionRef.current = null;
     if (!await queueCanvasSave()) setAiError(text.acceptedSaveFailed);
     aiSubmitRef.current = false;
@@ -1347,12 +1418,14 @@ export function KonvaDrawingCanvas({
   };
 
   const activateTool = useCallback((nextTool: Tool) => {
+    if (drawingRef.current) return;
     setTool(nextTool);
     setEraserMenuOpen(false);
     setContextMenu(null);
     if (nextTool !== "select") {
       setSelectedIds([]);
       setSelection(null);
+      selectionRef.current = null; regionPendingRef.current = false;
     }
   }, []);
 
@@ -1393,61 +1466,109 @@ export function KonvaDrawingCanvas({
     setSelection(null);
   };
 
-  const copySelectedObjects = useCallback(() => {
-    if (!selectedIds.length) return;
+  const elementNode = useCallback((id: string) => sceneLayerRef.current?.getChildren()
+    .find(node => node.id() === id) as Konva.Group | undefined, []);
+  const renderedBounds = useCallback((element: SceneElement): SelectionRect | null => {
+    const node = elementNode(element.id), layer = sceneLayerRef.current;
+    if (node && layer && node.getChildren().length) return node.getClientRect({ relativeTo: layer });
+    return sceneElementBounds(element);
+  }, [elementNode]);
+
+  const imageFragment = useCallback((element: SceneElement, bounds: SelectionRect): ImageElement => {
+    const node = elementNode(element.id);
+    if (!node) throw new Error("Missing canvas content");
+    return { ...(element.kind === "image" ? element : {}), id: createId(), kind: "image", ...bounds,
+      dataUrl: captureFragment(node, bounds, scaleX, scaleY) };
+  }, [elementNode, scaleX, scaleY]);
+
+  // Prepare the complete operation before mutating anything: failed image loads cannot cut a hole.
+  const selectionContent = useCallback((detach: boolean) => {
+    const bounds = selectionRef.current;
+    if (!bounds || !selectedIds.length) return null;
     const selected = new Set(selectedIds);
-    const copiedElements = elements
-      .filter((element) => selected.has(element.id))
-      .map(snapshotSceneElement);
-    const bounds = boundsForElements(copiedElements, copiedElements.map((element) => element.id));
-    if (!copiedElements.length || !bounds) return;
-    sceneClipboardRef.current = {
-      elements: copiedElements,
-      bounds: { ...bounds },
-    };
-    setClipboardReady(true);
-    setSelectedIds([]);
-    selectionRef.current = null;
-    setSelection(null);
-  }, [elements, selectedIds]);
+    const extracted: SceneElement[] = [];
+    const scene: SceneElement[] = [];
+    const replacements = new Map<string, string[]>();
+    for (const element of elementsRef.current) {
+      if (!selected.has(element.id)) { scene.push(element); continue; }
+      if (!regionPendingRef.current) {
+        extracted.push(element); scene.push(element); continue;
+      }
+      const source = renderedBounds(element);
+      const inside = source && intersectRect(source, bounds);
+      if (!source || !inside) { scene.push(element); continue; }
+      const outside = subtractRect(source, bounds);
+      if (!outside.length) { extracted.push(element); scene.push(element); continue; }
+      const piece = imageFragment(element, inside);
+      extracted.push(piece);
+      if (detach) {
+        const pieces = [...outside.map(rect => imageFragment(element, rect)), piece];
+        scene.push(...pieces);
+        replacements.set(element.id, pieces.map(item => item.id));
+      }
+    }
+    return extracted.length ? { scene, extracted, bounds, replacements } : null;
+  }, [imageFragment, renderedBounds, selectedIds]);
+
+  const trackSolutionFragments = useCallback((replacements: Map<string, string[]>) => {
+    const entry = solutionHistoryRef.current;
+    if (!entry || !entry.elementIds.some(id => replacements.has(id))) return;
+    setSolutionHistory({ ...entry, elementIds: entry.elementIds.flatMap(id => replacements.get(id) ?? [id]) });
+  }, [setSolutionHistory]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds([]); setSelection(null); selectionRef.current = null;
+    regionPendingRef.current = false; setContextMenu(null);
+  }, []);
+
+  const copySelectedObjects = useCallback((cut = false) => {
+    if (canvasAiBusy || photoLoading || drawingRef.current) return;
+    try {
+      const content = selectionContent(cut);
+      if (!content) return;
+      sceneClipboardRef.current = { elements: content.extracted.map(snapshotSceneElement), bounds: { ...content.bounds } };
+      setClipboardReady(true);
+      if (cut) {
+        beginEdit();
+        trackSolutionFragments(content.replacements);
+        const ids = new Set(content.extracted.map(element => element.id));
+        setElements(content.scene.filter(element => !ids.has(element.id)));
+        finishEdit();
+        clearSelection();
+      }
+      setEditError(false);
+    } catch { setEditError(true); }
+  }, [beginEdit, canvasAiBusy, clearSelection, finishEdit, photoLoading, selectionContent, setElements, trackSolutionFragments]);
 
   const duplicateSelectedObjects = useCallback(() => {
-    if (!selectedIds.length) return;
-    const bounds = boundsForElements(elements, selectedIds);
-    if (!bounds) return;
-    const dx = bounds.x + bounds.width + 18 <= PAGE_WIDTH ? 18 : bounds.x >= 18 ? -18 : 0;
-    const dy = bounds.y + bounds.height + 18 <= PAGE_HEIGHT ? 18 : bounds.y >= 18 ? -18 : 0;
-    const selected = new Set(selectedIds);
-    const clones = elements
-      .filter((element) => selected.has(element.id))
-      .map((element) => cloneSceneElement(element, dx, dy));
-    if (!clones.length) return;
-    setElements((current) => [...current, ...clones]);
-    const cloneIds = clones.map((element) => element.id);
-    const nextBounds = { ...bounds, x: bounds.x + dx, y: bounds.y + dy };
-    setSelectedIds(cloneIds);
-    selectionRef.current = nextBounds;
-    setSelection(nextBounds);
-  }, [elements, selectedIds]);
+    if (canvasAiBusy || photoLoading || drawingRef.current) return;
+    try {
+      const content = selectionContent(false);
+      if (!content) return;
+      const bounds = content.bounds;
+      const dx = bounds.x + bounds.width + 18 <= PAGE_WIDTH ? 18 : bounds.x >= 18 ? -18 : 0;
+      const dy = bounds.y + bounds.height + 18 <= PAGE_HEIGHT ? 18 : bounds.y >= 18 ? -18 : 0;
+      const clones = content.extracted.map(element => cloneSceneElement(element, dx, dy));
+      beginEdit(); setElements(current => [...current, ...clones]); finishEdit();
+      regionPendingRef.current = false;
+      setSelectedIds(clones.map(element => element.id));
+      const nextBounds = { ...bounds, x: bounds.x + dx, y: bounds.y + dy };
+      selectionRef.current = nextBounds; setSelection(nextBounds); setEditError(false);
+    } catch { setEditError(true); }
+  }, [beginEdit, canvasAiBusy, finishEdit, photoLoading, selectionContent, setElements]);
 
   const pasteClipboardAt = useCallback((point: Point) => {
-    if (canvasAiBusy) return;
+    if (canvasAiBusy || photoLoading || drawingRef.current) return;
     const clipboard = sceneClipboardRef.current;
     if (!clipboard) return;
     const offset = placementOffset(clipboard.bounds, point);
-    const clones = clipboard.elements.map((element) => cloneSceneElement(element, offset.x, offset.y));
-    const nextBounds = {
-      ...clipboard.bounds,
-      x: clipboard.bounds.x + offset.x,
-      y: clipboard.bounds.y + offset.y,
-    };
-    setElements((current) => [...current, ...clones]);
-    setTool("select");
-    setSelectedIds(clones.map((element) => element.id));
-    selectionRef.current = nextBounds;
-    setSelection(nextBounds);
-    setContextMenu(null);
-  }, [canvasAiBusy]);
+    const clones = clipboard.elements.map(element => cloneSceneElement(element, offset.x, offset.y));
+    const nextBounds = { ...clipboard.bounds, x: clipboard.bounds.x + offset.x, y: clipboard.bounds.y + offset.y };
+    beginEdit(); setElements(current => [...current, ...clones]); finishEdit();
+    regionPendingRef.current = false;
+    setTool("select"); setSelectedIds(clones.map(element => element.id));
+    selectionRef.current = nextBounds; setSelection(nextBounds); setContextMenu(null);
+  }, [beginEdit, canvasAiBusy, finishEdit, photoLoading, setElements]);
 
   const prepareSelectedTask = (solveImmediately: boolean) => {
     if (!selection || !selectedIds.length || canvasAiBusy || photoLoading) return;
@@ -1493,6 +1614,7 @@ export function KonvaDrawingCanvas({
     stageRef.current = event.target.getStage();
     const point = pointOnPage(event.evt, pageIndex);
     if (!point) return;
+    beginEdit();
     drawingRef.current = true;
     pointerIdRef.current = event.evt.pointerId;
     lastPointerPointRef.current = point;
@@ -1517,19 +1639,21 @@ export function KonvaDrawingCanvas({
       pointerScrollRef.current = requestAnimationFrame(scroll);
     }
 
-    if (
-      tool === "select" &&
-      selectedIds.length > 0 &&
-      selectionRef.current &&
-      rectContainsPoint(selectionRef.current, point)
-    ) {
-      draggingSelectionRef.current = true;
-      lastDragPointRef.current = point;
-      return;
+    const bounds = selectionRef.current;
+    if (tool === "select" && selectedIds.length && bounds) {
+      const corner = selectionHandles(bounds).findIndex(handle =>
+        Math.abs(handle.x - point.x) * scaleX <= 12 && Math.abs(handle.y - point.y) * scaleY <= 12);
+      if (corner >= 0 || rectContainsPoint(bounds, point)) {
+        draggingSelectionRef.current = true;
+        selectionGestureRef.current = { start: point, bounds: { ...bounds }, corner: corner < 0 ? null : corner,
+          elements: null, ids: selectedIds };
+        return;
+      }
     }
+    regionPendingRef.current = false;
+    selectionGestureRef.current = null;
 
     draggingSelectionRef.current = false;
-    lastDragPointRef.current = null;
     setSelectedIds([]);
 
     if (tool === "brush") {
@@ -1585,21 +1709,39 @@ export function KonvaDrawingCanvas({
     extendPaper(point);
 
     if (draggingSelectionRef.current && tool === "select") {
-      const last = lastDragPointRef.current;
-      const currentBounds = selectionRef.current;
-      if (!last || !currentBounds) return;
-      const rawDx = point.x - last.x;
-      const rawDy = point.y - last.y;
-      const dx = Math.max(-currentBounds.x, Math.min(rawDx, PAGE_WIDTH - currentBounds.x - currentBounds.width));
-      const dy = Math.max(-currentBounds.y, Math.min(rawDy, PAGE_HEIGHT - currentBounds.y - currentBounds.height));
-      if (dx !== 0 || dy !== 0) {
-        const selected = new Set(selectedIds);
-        setElements((current) => current.map((element) => moveSceneElement(element, selected, dx, dy)));
-        const nextBounds = { ...currentBounds, x: currentBounds.x + dx, y: currentBounds.y + dy };
-        selectionRef.current = nextBounds;
-        setSelection(nextBounds);
-      }
-      lastDragPointRef.current = point;
+      const gesture = selectionGestureRef.current;
+      if (!gesture) return;
+      if (!gesture.elements && Math.hypot((point.x - gesture.start.x) * scaleX, (point.y - gesture.start.y) * scaleY) < 2) return;
+      try {
+        if (!gesture.elements) {
+          const content = selectionContent(true);
+          if (!content) return;
+          gesture.ids = content.extracted.map(element => element.id);
+          // Legacy cards and outlined stars have fixed internal drawing sizes.
+          gesture.elements = content.scene.map(element => {
+            if (gesture.corner === null || !gesture.ids.includes(element.id) ||
+              (element.kind !== "saved-card" && element.kind !== "star")) return element;
+            const bounds = renderedBounds(element);
+            if (!bounds) return element;
+            const image = imageFragment(element, bounds);
+            gesture.ids = gesture.ids.map(id => id === element.id ? image.id : id);
+            return image;
+          });
+          regionPendingRef.current = false;
+          setSelectedIds(gesture.ids);
+          trackSolutionFragments(content.replacements);
+        }
+        const from = gesture.bounds;
+        const nextBounds = gesture.corner === null ? { ...from,
+          x: from.x + Math.max(-from.x, Math.min(point.x - gesture.start.x, PAGE_WIDTH - from.x - from.width)),
+          y: from.y + Math.max(-from.y, Math.min(point.y - gesture.start.y, PAGE_HEIGHT - from.y - from.height)) }
+          : resizeSelection(from, gesture.corner, point, { width: PAGE_WIDTH, height: PAGE_HEIGHT });
+        const ids = new Set(gesture.ids);
+        setElements(gesture.elements.map(element => !ids.has(element.id) ? element : gesture.corner === null
+          ? moveSceneElement(element, ids, nextBounds.x - from.x, nextBounds.y - from.y)
+          : scaleSceneElement(element, from, nextBounds)));
+        selectionRef.current = nextBounds; setSelection(nextBounds); setEditError(false);
+      } catch { setEditError(true); }
       return;
     }
 
@@ -1648,26 +1790,39 @@ export function KonvaDrawingCanvas({
     startRef.current = null;
     activeStrokeIdRef.current = null;
     lastEraserPointRef.current = null;
+    finishEdit();
+    selectionGestureRef.current = null;
     if (draggingSelectionRef.current) {
       draggingSelectionRef.current = false;
-      lastDragPointRef.current = null;
-      return;
+        return;
     }
     if (!start || !end || tool !== "select") return;
     const rect = normalizeRect(start, end);
     const valid = rect.width >= MIN_SELECTION_SIZE && rect.height >= MIN_SELECTION_SIZE;
     if (!valid) {
-      setSelectedIds([]);
-      setSelection(null);
+      const hit = selectionMode === "objects" ? [...elementsRef.current].reverse().find(element => {
+        const bounds = renderedBounds(element);
+        return bounds && rectContainsPoint(bounds, end);
+      }) : null;
+      const bounds = hit ? renderedBounds(hit) : null;
+      setSelectedIds(hit ? [hit.id] : []);
+      setSelection(bounds); selectionRef.current = bounds;
       return;
     }
     const ids = elementsRef.current
       .filter((element) => {
-        const bounds = sceneElementBounds(element);
-        return bounds !== null && rectsIntersect(rect, bounds);
+        const bounds = renderedBounds(element);
+        return bounds !== null && intersectRect(rect, bounds) !== null;
       })
       .map((element) => element.id);
-    const activeBounds = boundsForElements(elementsRef.current, ids);
+    const hitBounds = elementsRef.current.filter(element => ids.includes(element.id)).map(renderedBounds)
+      .filter((bounds): bounds is SelectionRect => bounds !== null);
+    const activeBounds = !hitBounds.length ? null : selectionMode === "region" ? rect : {
+      x: Math.min(...hitBounds.map(b => b.x)), y: Math.min(...hitBounds.map(b => b.y)),
+      width: Math.max(...hitBounds.map(b => b.x + b.width)) - Math.min(...hitBounds.map(b => b.x)),
+      height: Math.max(...hitBounds.map(b => b.y + b.height)) - Math.min(...hitBounds.map(b => b.y)),
+    };
+    regionPendingRef.current = selectionMode === "region" && ids.length > 0;
     setSelectedIds(ids);
     selectionRef.current = activeBounds;
     setSelection(activeBounds);
@@ -1697,38 +1852,53 @@ export function KonvaDrawingCanvas({
 
   const deleteSelectedObjects = useCallback(() => {
     if (canvasAiBusy || photoLoading || !selectedIds.length || drawingRef.current) return;
-    const selected = new Set(selectedIds);
-    setElements(current => current.filter(element => !selected.has(element.id)));
-    setSelectedIds([]); setSelection(null); selectionRef.current = null; setContextMenu(null);
-  }, [canvasAiBusy, photoLoading, selectedIds, setElements]);
+    try {
+      const content = selectionContent(true);
+      if (!content) return;
+      const ids = new Set(content.extracted.map(element => element.id));
+      beginEdit(); trackSolutionFragments(content.replacements);
+      setElements(content.scene.filter(element => !ids.has(element.id))); finishEdit();
+      clearSelection(); setEditError(false);
+    } catch { setEditError(true); }
+  }, [beginEdit, canvasAiBusy, clearSelection, finishEdit, photoLoading, selectedIds, selectionContent, setElements, trackSolutionFragments]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (canvasAiBusy || (event.target instanceof HTMLElement &&
-        (event.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)))) return;
-      if (event.key === "Delete" && !event.ctrlKey && !event.metaKey && !event.altKey && selectedIds.length) {
-        event.preventDefault(); deleteSelectedObjects(); return;
+      if (canvasAiBusy || photoLoading || drawingRef.current || event.isComposing ||
+        (event.target instanceof HTMLElement && (event.target.isContentEditable ||
+          event.target.closest("input, textarea, select, [role=dialog]")))) return;
+      const modifier = event.ctrlKey || event.metaKey;
+      if (modifier && !event.altKey) {
+        if (event.code === "KeyZ" || event.code === "KeyY") {
+          event.preventDefault();
+          changeEditHistory(event.code === "KeyY" || event.shiftKey ? "redo" : "undo");
+          return;
+        }
+        if (tool !== "select") return;
+        if ((event.code === "KeyC" || event.code === "KeyX") && selectedIds.length) {
+          event.preventDefault(); copySelectedObjects(event.code === "KeyX"); return;
+        }
+        if (event.code === "KeyV" && sceneClipboardRef.current) {
+          event.preventDefault();
+          const source = selectionRef.current;
+          pasteClipboardAt({ x: (source?.x ?? 0) + 6, y: (source?.y ?? 0) + 6 });
+        }
       }
-      if (!(event.ctrlKey || event.metaKey) || tool !== "select") return;
-      if (event.key.toLowerCase() === "c" && selectedIds.length) {
-        event.preventDefault();
-        copySelectedObjects();
+      if (event.key === "Delete" && !modifier && !event.altKey && selectedIds.length) {
+        event.preventDefault(); deleteSelectedObjects();
       }
-      if (event.key.toLowerCase() === "v" && sceneClipboardRef.current) {
-        event.preventDefault();
-        const source = selectionRef.current;
-        pasteClipboardAt({ x: (source?.x ?? 0) + 6, y: (source?.y ?? 0) + 6 });
-      }
+      if (event.key === "Escape") clearSelection();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [canvasAiBusy, copySelectedObjects, deleteSelectedObjects, pasteClipboardAt, selectedIds.length, tool]);
+  }, [canvasAiBusy, changeEditHistory, clearSelection, copySelectedObjects, deleteSelectedObjects,
+    pasteClipboardAt, photoLoading, selectedIds.length, tool]);
 
   const cursor = tool === "select" ? (selectedIds.length ? "move" : "cell") : "crosshair";
   const selectionIslandLeft = selection
-    ? stageSize.width < 264
+    ? stageSize.width < 310
       ? stageSize.width / 2
-      : Math.max(132, Math.min((selection.x + selection.width / 2) * scaleX, stageSize.width - 132))
+      : Math.max(155, Math.min((selection.x + selection.width / 2) * scaleX, stageSize.width - 155))
     : 0;
   const selectionIslandTop = selection
     ? selection.y * scaleY >= 58
@@ -1788,6 +1958,14 @@ export function KonvaDrawingCanvas({
           </div>
         </div>
         <div className="absolute left-1/2 top-4 z-10 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-[#dfe3e8] bg-white p-1.5 shadow-sm">
+          {[{ direction: "undo" as const, Icon: Undo2, enabled: historyRef.current.canUndo },
+            { direction: "redo" as const, Icon: Redo2, enabled: historyRef.current.canRedo }].map(({ direction, Icon, enabled }) => (
+            <button key={direction} type="button" aria-label={text[direction]}
+              title={`${text[direction]} (Ctrl+${direction === "undo" ? "Z" : "Y"})`}
+              disabled={!enabled || canvasAiBusy || photoLoading}
+              className="grid size-10 place-items-center rounded-lg text-[#697386] hover:bg-[#eef0f3] disabled:opacity-30"
+              onClick={() => changeEditHistory(direction)}><Icon size={19} aria-hidden="true" /></button>
+          ))}
           {tools.map(({ id, Icon }) => {
             const label = text[id];
             if (id === "eraser") {
@@ -1843,6 +2021,22 @@ export function KonvaDrawingCanvas({
                 </div>
               );
             }
+            if (id === "select") return (
+              <div className="relative" key={id}>
+                <button type="button" aria-label={label} aria-pressed={tool === id}
+                  title={label} onClick={() => activateTool(id)}
+                  className={`grid size-10 place-items-center rounded-lg ${tool === id ? "bg-[#eff6ff] text-[#2563eb]" : "text-[#697386] hover:bg-[#eef0f3]"}`}>
+                  <Icon size={19} aria-hidden="true" />
+                </button>
+                {tool === "select" && <div className="absolute left-1/2 top-14 flex -translate-x-1/2 gap-1 whitespace-nowrap rounded-xl border border-[#dfe3e8] bg-white p-1 shadow-sm">
+                  {(["objects", "region"] as const).map(mode => <button key={mode} type="button"
+                    aria-pressed={selectionMode === mode} onClick={() => { if (!drawingRef.current) { setSelectionMode(mode); clearSelection(); } }}
+                    className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs ${selectionMode === mode ? "bg-[#eff6ff] text-[#2563eb]" : "text-[#697386] hover:bg-[#eef0f3]"}`}>
+                    {mode === "region" && <ScanLine size={14} aria-hidden="true" />}{text[mode]}
+                  </button>)}
+                </div>}
+              </div>
+            );
             return (
               <button
                 aria-label={label}
@@ -1898,6 +2092,9 @@ export function KonvaDrawingCanvas({
           </button>
         </div>
 
+        {editError && <div role="alert" className="absolute left-1/2 top-28 z-30 flex max-w-[90%] -translate-x-1/2 items-center gap-3 rounded-xl border border-red-200 bg-white px-4 py-3 text-sm text-red-600 shadow-sm">
+          {text.editFailed}<button type="button" aria-label={text.close} onClick={() => setEditError(false)}><X size={16} /></button>
+        </div>}
         {photoError && (
           <div className="absolute left-1/2 top-[72px] z-20 flex max-w-[90%] -translate-x-1/2 items-center gap-3 rounded-xl border border-red-200 bg-white px-4 py-3 text-sm text-red-600 shadow-sm" role="alert">
             {text[photoError]}
@@ -1945,6 +2142,15 @@ export function KonvaDrawingCanvas({
                 activatePage(pageIndex); stageRef.current = event.target.getStage();
                 handleCanvasContextMenu(event);
               }}
+              onPointerMove={event => {
+                if (drawingRef.current) return;
+                const container = event.target.getStage()?.container(), bounds = selectionRef.current;
+                const point = pointOnPage(event.evt, pageIndex);
+                if (!container || !point) return;
+                const corner = tool === "select" && pageIndex === visiblePageIndex && bounds && selectedIds.length
+                  ? selectionHandles(bounds).findIndex(handle => Math.abs(handle.x - point.x) * scaleX <= 12 && Math.abs(handle.y - point.y) * scaleY <= 12) : -1;
+                container.style.cursor = corner >= 0 ? (corner === 0 || corner === 3 ? "nwse-resize" : "nesw-resize") : cursor;
+              }}
               onPointerDown={event => handlePointerDown(event, pageIndex)}
               ref={pageIndex === visiblePageIndex ? stageRef : undefined}
               style={{ cursor, touchAction: "none" }}
@@ -1956,7 +2162,7 @@ export function KonvaDrawingCanvas({
                   width={PAGE_WIDTH} height={PAGE_HEIGHT} />
               </Layer>
               <Layer listening={false} ref={pageIndex === visiblePageIndex ? sceneLayerRef : undefined} scaleX={scaleX} scaleY={scaleY}>
-                {(pageIndex === visiblePageIndex ? visibleElements : page.elements as SceneElement[]).map((element) => <SceneElementView element={element} key={element.id} />)}
+                {(pageIndex === visiblePageIndex ? visibleElements : page.elements as SceneElement[]).map((element) => <Group id={element.id} key={element.id}><SceneElementView element={element} /></Group>)}
               </Layer>
               {solution && (
                 <Layer listening={false} scaleX={scaleX} scaleY={scaleY}>
@@ -1999,13 +2205,14 @@ export function KonvaDrawingCanvas({
                   selectionHandles(selection).map((handle, index) => (
                     <KonvaRect
                       fill="#ffffff"
-                      height={12}
+                      height={10 / scaleY}
                       key={index}
                       stroke="#2563eb"
                       strokeWidth={2}
-                      width={12}
-                      x={handle.x - 6}
-                      y={handle.y - 6}
+                      strokeScaleEnabled={false}
+                      width={10 / scaleX}
+                      x={handle.x - 5 / scaleX}
+                      y={handle.y - 5 / scaleY}
                     />
                   ))}
               </Layer>}
@@ -2043,12 +2250,15 @@ export function KonvaDrawingCanvas({
                 className={`grid size-9 place-items-center rounded-lg hover:bg-[#eef0f3] ${
                   clipboardReady ? "text-[#0f766e]" : "text-[#697386]"
                 }`}
-                onClick={copySelectedObjects}
+                onClick={() => copySelectedObjects()}
                 title={text.copy}
                 type="button"
               >
                 <Copy aria-hidden="true" size={17} strokeWidth={2} />
               </button>
+              <button type="button" aria-label={text.cut} title={`${text.cut} (Ctrl+X)`}
+                className="grid size-9 place-items-center rounded-lg text-[#697386] hover:bg-[#eef0f3]"
+                onClick={() => copySelectedObjects(true)}><Scissors size={17} aria-hidden="true" /></button>
               <button
                 aria-label={text.duplicateAria}
                 className="grid size-9 place-items-center rounded-lg text-[#697386] hover:bg-[#eef0f3]"
