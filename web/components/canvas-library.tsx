@@ -3,6 +3,7 @@
 import { ArrowUpRight, MoreHorizontal, PanelLeft, Plus, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { CanvasPreview } from "./canvas-preview";
+import { COMPANION_TEXT, type CompanionMode } from "@/lib/canvas-companion";
 import styles from "./canvas-library.module.css";
 
 import {
@@ -90,6 +91,8 @@ const COPY = {
 
 export function CanvasLibrary({
   appTheme,
+  companion,
+  onCompanionChange,
   groupFilter,
   onGroupFilterChange: setGroupFilter,
   language,
@@ -100,6 +103,8 @@ export function CanvasLibrary({
   token,
 }: {
   appTheme: AppTheme;
+  companion: CompanionMode;
+  onCompanionChange: (mode: CompanionMode) => void;
   groupFilter: string;
   onGroupFilterChange: Dispatch<SetStateAction<string>>;
   language: AppLanguage;
@@ -360,7 +365,7 @@ export function CanvasLibrary({
       {groups.map(group => <button type="button" key={group.id} className={`${styles.navButton} ${styles.groupButton}`}
         style={{ "--group-color": groupColors.get(group.id) } as CSSProperties} title={group.name}
         aria-current={groupFilter === group.id ? "page" : undefined} onClick={() => selectGroup(group.id)}>
-        <span className={styles.groupMarker} aria-hidden="true" /><span className={styles.groupName}>{group.name}</span>
+        <span className={styles.groupName}>{group.name}</span>
       </button>)}
     </div>
   </nav>;
@@ -428,6 +433,10 @@ export function CanvasLibrary({
       <fieldset className={styles.setting}><legend>{text.language}</legend><div className={styles.segmented}>
         {([ ["ru", "Русский"], ["en", "English"], ["zh", "中文"] ] as const).map(([id, label]) => <button type="button" key={id}
           aria-pressed={language === id} onClick={() => onLanguageChange(id)}>{label}</button>)}
+      </div></fieldset>
+      <fieldset className={styles.setting}><legend>{COMPANION_TEXT[language].companion}</legend><div className={styles.segmented}>
+        {(["off", "white", "teacher"] as const).map(mode => <button type="button" key={mode}
+          aria-pressed={companion === mode} onClick={() => onCompanionChange(mode)}>{COMPANION_TEXT[language][mode]}</button>)}
       </div></fieldset>
       <a className={styles.settingsLink} href="/handwriting">{text.handwriting}<ArrowUpRight size={17} aria-hidden="true" /></a>
       <button type="button" className={styles.logout} onClick={onLogout}>{text.logout}</button>

@@ -1,18 +1,22 @@
 "use client";
 import { useRef } from "react";
+import type { CompanionMode } from "@/lib/canvas-companion";
 import styles from "./canvas-pet.module.css";
 
 export type CanvasPetMood = "idle" | "thinking" | "writing" | "ready";
 
-export function CanvasPet({ mood = "idle", className = "" }: { mood?: CanvasPetMood; className?: string }) {
+export function CanvasPet({ mood = "idle", className = "", variant = "white" }: { mood?: CanvasPetMood; className?: string; variant?: CompanionMode }) {
   const eyesRef = useRef<SVGGElement>(null);
+  if (variant === "off") return null;
+  if (variant === "teacher") return <img src="/companions/teacher.png" alt="" aria-hidden="true"
+    className={`${styles.pet} ${styles.teacher} ${className}`} data-companion="teacher" width={500} height={500} draggable={false} />;
   const blink = () => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     eyesRef.current?.animate([{ transform: "scaleY(1)" }, { transform: "scaleY(.12)", offset: .5 }, { transform: "scaleY(1)" }],
       { duration: 260, easing: "ease-in-out" });
   };
   return (
-    <svg aria-hidden="true" className={`${styles.pet} ${className}`} data-mood={mood} viewBox="0 0 104 104" fill="none" onPointerEnter={blink}>
+    <svg aria-hidden="true" className={`${styles.pet} ${className}`} data-companion="white" data-mood={mood} viewBox="0 0 104 104" fill="none" onPointerEnter={blink}>
       <ellipse className={styles.shadow} cx="51" cy="92" rx="29" ry="4" fill="#1e3a5f" opacity=".09" />
       <g className={styles.body}>
         <path d="M78 69c14-11 19 1 10 8-4 3-8 2-12 0" fill="#9bbcff" stroke="#304867" strokeWidth="2.5" strokeLinecap="round" />

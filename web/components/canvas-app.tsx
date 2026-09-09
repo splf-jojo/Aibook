@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { CanvasLibrary } from "@/components/canvas-library";
+import { COMPANION_STORAGE_KEY, companionMode, type CompanionMode } from "@/lib/canvas-companion";
 import {
   API_URL,
   TOKEN_STORAGE_KEY,
@@ -241,8 +242,10 @@ export function CanvasApp() {
   const [ready, setReady] = useState(false);
   const [theme, setTheme] = useState<AppTheme>("light");
   const [language, setLanguage] = useState<AppLanguage>("en");
+  const [companion, setCompanion] = useState<CompanionMode>("white");
 
   useEffect(() => {
+    try { setCompanion(companionMode(localStorage.getItem(COMPANION_STORAGE_KEY))); } catch { /* Optional preference. */ }
     const storedTheme = localStorage.getItem(THEME_KEY);
     const storedLanguage = localStorage.getItem(LANGUAGE_KEY);
     if (storedTheme === "light" || storedTheme === "dark") setTheme(storedTheme);
@@ -280,6 +283,11 @@ export function CanvasApp() {
     localStorage.setItem(LANGUAGE_KEY, nextLanguage);
   }, []);
 
+  const changeCompanion = useCallback((next: CompanionMode) => {
+    setCompanion(next);
+    try { localStorage.setItem(COMPANION_STORAGE_KEY, next); } catch { /* Keep the in-memory preference. */ }
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     setToken(null);
@@ -305,6 +313,8 @@ export function CanvasApp() {
     return (
       <CanvasLibrary
         appTheme={theme}
+        companion={companion}
+        onCompanionChange={changeCompanion}
         groupFilter={libraryGroup}
         onGroupFilterChange={setLibraryGroup}
         language={language}
@@ -319,6 +329,7 @@ export function CanvasApp() {
   return (
     <KonvaDrawingCanvas
       canvas={activeCanvas}
+      companionMode={companion}
       key={activeCanvas.id}
       language={language}
       onBack={() => setActiveCanvas(null)}

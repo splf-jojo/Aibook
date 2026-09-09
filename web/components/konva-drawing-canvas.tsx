@@ -17,7 +17,8 @@ import {
   ImagePlus,
   MessageSquarePlus,
   MonitorUp,
-  MousePointer2,
+  MessageSquare,
+  Wrench,
   PenLine,
   SendHorizontal,
   Sparkles,
@@ -50,6 +51,8 @@ import { API_URL, apiHeaders, type CanvasRecord, type CanvasPage } from "@/lib/c
 import { CanvasEditHistory, intersectRect, subtractRect, resizeSelection } from "@/lib/canvas-editing";
 import { captureFragment } from "@/lib/canvas-fragment";
 import { CANVAS_EDITING_TEXT } from "@/lib/canvas-editing-text";
+import { COMPANION_TEXT, type CompanionMode } from "@/lib/canvas-companion";
+import { CanvasPhotoError, photoBounds, photoDropPoint, readCanvasPhoto } from "@/lib/canvas-photo";
 import { PdfPageBackground } from "@/components/pdf-page-background";
 import { findSolutionSpace } from "@/lib/solution-placement";
 import { CANVAS_AI_TEXT } from "@/lib/canvas-ai-text";
@@ -106,7 +109,7 @@ const ERASER_LONG_PRESS_MS = 500;
 const tools: Array<{ id: Tool; Icon: typeof Brush }> = [
   { id: "brush", Icon: Brush },
   { id: "eraser", Icon: Eraser },
-  { id: "select", Icon: MousePointer2 },
+  { id: "select", Icon: Scan },
 ];
 
 function replaceStrokePoints(stroke: StrokeElement, points: number[], id = stroke.id): StrokeElement {
@@ -569,12 +572,14 @@ function ElementBoundsOverlay({ sceneLayerRef }: { sceneLayerRef: RefObject<Konv
 
 export function KonvaDrawingCanvas({
   canvas,
+  companionMode,
   language,
   onBack,
   onLogout,
   token,
 }: {
   canvas: CanvasRecord;
+  companionMode: CompanionMode;
   language: AppLanguage;
   onBack: () => void;
   onLogout: () => void;
@@ -583,6 +588,8 @@ export function KonvaDrawingCanvas({
   const workspaceRef = useRef<HTMLElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoRequestRef = useRef(0);
+  const photoImportingRef = useRef(false);
+  const [dropPageIndex, setDropPageIndex] = useState<number | null>(null);
   const [photoLoading, setPhotoLoading] = useState(false);
   const [photoError, setPhotoError] = useState<"photoInvalid" | "photoTooLarge" | "photoFailed" | null>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
@@ -639,8 +646,10 @@ export function KonvaDrawingCanvas({
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [tool, setTool] = useState<Tool>("brush");
   const [showElementBounds, setShowElementBounds] = useState(false);
-  const [eraserMode, setEraserMode] = useState<EraserMode>("normal");
+  const [eraserMode, setEraserMode] = useState<EraserMode>("object");
   const [eraserMenuOpen, setEraserMenuOpen] = useState(false);
+  const [selectMenuOpen, setSelectMenuOpen] = useState(false);
+  const selectControlRef = useRef<HTMLDivElement>(null);
   const [selection, setSelection] = useState<SelectionRect | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [clipboardReady, setClipboardReady] = useState(false);
@@ -718,54 +727,36 @@ export function KonvaDrawingCanvas({
     requestAnimationFrame(() => pageNodesRef.current.get(index)?.scrollIntoView({ block: "nearest" }));
   }, [canvasAiBusy, photoLoading, setSolutionHistory]);
 
-  const addPhoto = async (file: File) => {
+  const addPhotos = async (files: File[], target?: { pageIndex: number; point: Point }) => {
+    if (!files.length || photoImportingRef.current || drawingRef.current || canvasAiBusy) return;
     const request = ++photoRequestRef.current;
-    const pageIndex = activePageIndexRef.current;
-    setPhotoError(null);
-    if (file.size > 20 * 1024 * 1024) {
-      setPhotoError("photoTooLarge");
-      return;
-    }
-    setPhotoLoading(true);
+    const targetPageId = canvasPagesRef.current[target?.pageIndex ?? activePageIndexRef.current]?.id;
+    if (!targetPageId) return;
+    photoImportingRef.current = true;
+    setPhotoLoading(true); setPhotoError(null); setDropPageIndex(null);
     try {
-      const header = new Uint8Array(await file.slice(0, 8).arrayBuffer());
-      const isPng = [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => header[index] === byte);
-      const isJpeg = header[0] === 255 && header[1] === 216 && header[2] === 255;
-      if (!isPng && !isJpeg) {
-        if (request === photoRequestRef.current) setPhotoError("photoInvalid");
-        return;
+      const added: ImageElement[] = [];
+      for (const [index, file] of files.entries()) {
+        const photo = await readCanvasPhoto(file);
+        if (request !== photoRequestRef.current) return;
+        const point = target ? { x: target.point.x + index * 18, y: target.point.y + index * 18 } : undefined;
+        added.push({ id: createId(), kind: "image", dataUrl: photo.dataUrl,
+          ...photoBounds(photo.width, photo.height, { width: PAGE_WIDTH, height: PAGE_HEIGHT }, point) });
       }
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(reader.error);
-        reader.onabort = () => reject(new Error("photo-read-aborted"));
-        reader.readAsDataURL(new Blob([file], { type: isPng ? "image/png" : "image/jpeg" }));
-      });
-      const photo = new window.Image();
-      photo.src = dataUrl;
-      await photo.decode();
-      if (!photo.naturalWidth || !photo.naturalHeight) throw new Error("empty-photo");
-      if (request !== photoRequestRef.current || pageIndex !== activePageIndexRef.current) return;
-      const scale = Math.min(1, (PAGE_WIDTH - 80) / photo.naturalWidth, (PAGE_HEIGHT - 80) / photo.naturalHeight);
-      const width = photo.naturalWidth * scale;
-      const height = photo.naturalHeight * scale;
-      const bounds = { x: (PAGE_WIDTH - width) / 2, y: (PAGE_HEIGHT - height) / 2, width, height };
-      const element: ImageElement = { id: createId(), kind: "image", ...bounds, dataUrl };
-      beginEdit();
-      setElements((current) => [...current, element]);
-      finishEdit();
+      const index = canvasPagesRef.current.findIndex(page => page.id === targetPageId);
+      if (request !== photoRequestRef.current || index < 0) return;
+      // Import the batch atomically. Decode failures leave the entire note untouched.
+      activatePage(index);
+      beginEdit(); setElements(current => [...current, ...added]); finishEdit();
       regionPendingRef.current = false;
-      setTool("select");
-      setSelectedIds([element.id]);
-      selectionRef.current = bounds;
-      setSelection(bounds);
-      setEraserMenuOpen(false);
-      setContextMenu(null);
-    } catch {
-      if (request === photoRequestRef.current) setPhotoError("photoFailed");
+      setTool("select"); setSelectedIds(added.map(element => element.id));
+      const bounds = boundsForElements(added, added.map(element => element.id));
+      selectionRef.current = bounds; setSelection(bounds);
+      setEraserMenuOpen(false); setSelectMenuOpen(false); setContextMenu(null);
+    } catch (error) {
+      if (request === photoRequestRef.current) setPhotoError(error instanceof CanvasPhotoError ? error.issue : "photoFailed");
     } finally {
-      if (request === photoRequestRef.current) setPhotoLoading(false);
+      if (request === photoRequestRef.current) { photoImportingRef.current = false; setPhotoLoading(false); }
     }
   };
 
@@ -983,6 +974,7 @@ export function KonvaDrawingCanvas({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setEraserMenuOpen(false);
+        setSelectMenuOpen(false);
         setContextMenu(null);
       }
     };
@@ -1420,6 +1412,7 @@ export function KonvaDrawingCanvas({
   const activateTool = useCallback((nextTool: Tool) => {
     if (drawingRef.current) return;
     setTool(nextTool);
+    setSelectMenuOpen(false);
     setEraserMenuOpen(false);
     setContextMenu(null);
     if (nextTool !== "select") {
@@ -1428,6 +1421,15 @@ export function KonvaDrawingCanvas({
       selectionRef.current = null; regionPendingRef.current = false;
     }
   }, []);
+
+  useEffect(() => {
+    if (!selectMenuOpen) return;
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !selectControlRef.current?.contains(event.target)) setSelectMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [selectMenuOpen]);
 
   const beginEraserPress = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
@@ -1907,7 +1909,12 @@ export function KonvaDrawingCanvas({
     : 0;
   return (
     <>
-    <main className="flex h-dvh w-dvw overflow-hidden bg-[#f4f5f7]">
+    <main className="flex h-dvh w-dvw overflow-hidden bg-[#f4f5f7]"
+      onDragOver={event => {
+        if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); event.dataTransfer.dropEffect = "none"; }
+      }}
+      onDrop={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); setDropPageIndex(null); }}
+    >
       <section
         className="relative flex min-h-0 min-w-0 flex-1 justify-center overflow-hidden px-6 pb-4 pt-[72px]"
         ref={workspaceRef}
@@ -2022,15 +2029,20 @@ export function KonvaDrawingCanvas({
               );
             }
             if (id === "select") return (
-              <div className="relative" key={id}>
+              <div className="relative" key={id} ref={selectControlRef}>
                 <button type="button" aria-label={label} aria-pressed={tool === id}
-                  title={label} onClick={() => activateTool(id)}
+                  aria-expanded={tool === id && selectMenuOpen} aria-controls="canvas-select-modes"
+                  title={label} onClick={() => {
+                    if (drawingRef.current) return;
+                    const open = tool !== id || !selectMenuOpen;
+                    activateTool(id); setSelectMenuOpen(open);
+                  }}
                   className={`grid size-10 place-items-center rounded-lg ${tool === id ? "bg-[#eff6ff] text-[#2563eb]" : "text-[#697386] hover:bg-[#eef0f3]"}`}>
                   <Icon size={19} aria-hidden="true" />
                 </button>
-                {tool === "select" && <div className="absolute left-1/2 top-14 flex -translate-x-1/2 gap-1 whitespace-nowrap rounded-xl border border-[#dfe3e8] bg-white p-1 shadow-sm">
+                {tool === "select" && selectMenuOpen && <div id="canvas-select-modes" role="group" aria-label={text.select} className="absolute left-1/2 top-14 flex -translate-x-1/2 gap-1 whitespace-nowrap rounded-xl border border-[#dfe3e8] bg-white p-1 shadow-sm">
                   {(["objects", "region"] as const).map(mode => <button key={mode} type="button"
-                    aria-pressed={selectionMode === mode} onClick={() => { if (!drawingRef.current) { setSelectionMode(mode); clearSelection(); } }}
+                    aria-pressed={selectionMode === mode} onClick={() => { if (!drawingRef.current) { setSelectionMode(mode); setSelectMenuOpen(false); clearSelection(); } }}
                     className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs ${selectionMode === mode ? "bg-[#eff6ff] text-[#2563eb]" : "text-[#697386] hover:bg-[#eef0f3]"}`}>
                     {mode === "region" && <ScanLine size={14} aria-hidden="true" />}{text[mode]}
                   </button>)}
@@ -2064,7 +2076,7 @@ export function KonvaDrawingCanvas({
             title={text.elementBounds}
             type="button"
           >
-            <Scan aria-hidden="true" size={19} strokeWidth={2} />
+            <Wrench aria-hidden="true" size={19} strokeWidth={2} />
           </button>
 
           <input
@@ -2074,7 +2086,7 @@ export function KonvaDrawingCanvas({
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
               event.currentTarget.value = "";
-              if (file) void addPhoto(file);
+              if (file) void addPhotos([file]);
             }}
             ref={photoInputRef}
             type="file"
@@ -2107,13 +2119,15 @@ export function KonvaDrawingCanvas({
         {!sidebarOpen && (
           <button
             aria-label={text.openAi}
-            className={companion.launcher}
+            className={`${companion.launcher} ${companionMode === "off" ? companion.plainLauncher : ""}`}
             onClick={() => setSidebarOpen(true)}
             title={text.openAi}
             type="button"
           >
-            <CanvasPet mood={petMood} />
-            <span>{text.petName}</span>
+            {companionMode === "off" ? <MessageSquare size={23} aria-hidden="true" /> : <>
+              <CanvasPet mood={petMood} variant={companionMode} />
+              <span>{companionMode === "teacher" ? COMPANION_TEXT[language].teacher : text.petName}</span>
+            </>}
           </button>
         )}
 
@@ -2122,10 +2136,29 @@ export function KonvaDrawingCanvas({
         {visiblePages.map((page, pageIndex) => <div key={page.id}
           ref={node => { if (node) pageNodesRef.current.set(pageIndex, node); else pageNodesRef.current.delete(pageIndex); }}
           data-page-index={pageIndex}
+          onDragOver={event => {
+            if (!event.dataTransfer.types.includes("Files")) return;
+            event.preventDefault(); event.stopPropagation();
+            const allowed = !canvasAiBusy && !photoImportingRef.current && !drawingRef.current;
+            event.dataTransfer.dropEffect = allowed ? "copy" : "none";
+            setDropPageIndex(allowed ? pageIndex : null);
+          }}
+          onDragLeave={event => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            if (event.clientX <= rect.left || event.clientX >= rect.right || event.clientY <= rect.top || event.clientY >= rect.bottom) setDropPageIndex(null);
+          }}
+          onDrop={event => {
+            if (!event.dataTransfer.types.includes("Files")) return;
+            event.preventDefault(); event.stopPropagation(); setDropPageIndex(null);
+            const point = photoDropPoint({ x: event.clientX, y: event.clientY }, event.currentTarget.getBoundingClientRect(),
+              { width: PAGE_WIDTH, height: PAGE_HEIGHT });
+            void addPhotos(Array.from(event.dataTransfer.files), { pageIndex, point });
+          }}
           aria-label={`A4 canvas · ${pageIndex + 1}`}
           className="keep-white relative flex-none overflow-hidden rounded-[3px] bg-white shadow-[0_4px_24px_rgba(17,24,39,0.08)] ring-1 ring-[#dfe3e8]"
           style={{ height: stageSize.height, width: stageSize.width }}
         >
+          {dropPageIndex === pageIndex && <div aria-hidden="true" className="pointer-events-none absolute inset-1 z-30 rounded border-2 border-dashed border-[#2563eb] bg-[#2563eb]/5" />}
           {solution && (
             <div className="pointer-events-none absolute bottom-2 right-3 z-10 rounded-md bg-[#eff6ff] px-2 py-1 text-xs text-[#2563eb]">
               {text.draftPage} {pageIndex + 1}
@@ -2293,7 +2326,8 @@ export function KonvaDrawingCanvas({
       {sidebarOpen && (
         <aside
           aria-label={text.ai}
-          className={companion.sidebar}
+          className={`${companion.sidebar} ${companionMode === "teacher" ? companion.teacherBoard : ""}`}
+          data-companion-mode={companionMode}
           style={{ width: sidebarWidth }}
         >
           <div
@@ -2357,7 +2391,7 @@ export function KonvaDrawingCanvas({
               </button>
             ))}
           </div>
-          <CanvasConversation messages={activeChat?.messages ?? []} chatId={activeChatId} labels={text} mood={petMood}
+          <CanvasConversation messages={activeChat?.messages ?? []} chatId={activeChatId} labels={text} companionMode={companionMode}
             onSolutionClick={(canvasId, solutionId) => void focusSolution(canvasId, solutionId)} canFocusSolution={canFocusSolution}
             pending={sidebarBusy && loadingChatId === activeChatId && aiAnimationRef.current === null} />
           {(solution || sidebarBusy) && (

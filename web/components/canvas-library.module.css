@@ -46,7 +46,6 @@
 .groupButton { background: color-mix(in srgb, var(--group-color) 7%, transparent); color: var(--library-ink); }
 .groupButton:hover { background: color-mix(in srgb, var(--group-color) 14%, transparent); }
 .groupButton[aria-current="page"] { border-color: color-mix(in srgb, var(--group-color) 38%, transparent); background: color-mix(in srgb, var(--group-color) 17%, transparent); }
-.groupMarker { width: 10px; height: 14px; flex-shrink: 0; border-radius: 3px; background: var(--group-color); }
 .groupName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebarFooter { margin-top: auto; padding: 16px 4px 20px; border-top: 1px solid var(--library-line); }
 .sidebarSettings { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 42px; padding: 10px 12px; border: 0; border-radius: 7px; background: none; color: var(--library-muted); text-align: left; font-size: 13px; }

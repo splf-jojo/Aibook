@@ -5,6 +5,8 @@
   overflow: visible;
 }
 
+.teacher { object-fit: contain; image-rendering: pixelated; }
+
 .body {
   transform-origin: 51px 86px;
   animation: breathe 4.6s ease-in-out infinite;
