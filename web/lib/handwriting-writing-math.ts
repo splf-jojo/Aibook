@@ -27,8 +27,8 @@ export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<str
       const value = text(node);
       if (!value.trim()) return node;
       if (node.kind === "mo" || Array.from(value).length === 1 || aliases.has(value)) return wrap(node);
-      // With no margins, keep font runs intact for exact printed layout.
-      if (options.preserveText && !aliases.size && !Object.values(margin).some(Boolean)) return wrap(node);
+      // Functions remain one font run whether or not margins are enabled.
+      if (options.preserveText && node.kind === "mi") return wrap(node);
       // A number such as 123 must get three margins. Preserve the original
       // font variant when splitting a multi-letter upright token.
       const pieces = Array.from((node as AbstractMmlTokenNode).getText()).map((character) => {

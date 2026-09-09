@@ -12,19 +12,31 @@ export type WritingSettings = { size: number; variation: number; verticalScatter
 export const DEFAULT_WRITING_SETTINGS: WritingSettings = { size: 48, variation: 0, verticalScatter: 0, letterSpacing: 3, lineSpacing: 1.7, seed: 1, padding: ZERO_INSETS, margin: ZERO_INSETS };
 export const MAX_WRITING_LENGTH = 2000;
 export type Box = { x: number; y: number; width: number; height: number };
-export type WritingPlacement = Box & { label: string; glyph?: WritingGlyph; angle: number; cell: Box; reference: Box; content: Box; outer: Box; padding: Insets; margin: Insets };
+export type WritingPlacement = Box & { label: string; glyph?: WritingGlyph; kind?: "handwriting" | "printed" | "missing" | "structure" | "prose"; angle: number; cell: Box; reference: Box; content: Box; outer: Box; padding: Insets; margin: Insets };
 export type WritingResult = {
   svg: string; width: number; height: number; missing: string[]; unsupported: string[];
   /** Math symbols kept as font outlines in canvas output; prose is excluded. */
   fontFallback?: string[];
   /** Inspection only: printed outlines are already included in svg. */
   fontPlacements?: WritingPlacement[];
+  /** All inspected items in formula order, independently of their representation. */
+  inspectionPlacements?: WritingPlacement[];
   preview?: { svg: string; width: number; height: number; placements: WritingPlacement[]; origin: { x: number; y: number } }; placements: WritingPlacement[]; origin: { x: number; y: number };
 };
 
 export function scaleInsets(insets: Insets, scale = 1): Insets {
   const value = (n: number) => (Number.isFinite(n) ? Math.max(0, Math.min(MAX_SYMBOL_SPACING, n)) : 0) * scale;
   return { top: value(insets.top), right: value(insets.right), bottom: value(insets.bottom), left: value(insets.left) };
+}
+
+/** Printed outlines keep their original position at zero settings. Only explicit
+ * padding/variation transforms them; fitting handwritten glyphs is unchanged. */
+export function placePrintedGlyph(cell: Box, reference: Box, ink: Box, label: string, index: number, settings: WritingSettings, fontScale = 1): WritingPlacement {
+  const proxy: WritingGlyph = { latex: label, medoidId: "", image: "", width: ink.width, height: ink.height };
+  const fitted = placeGlyph(cell, label, proxy, index, settings, fontScale, ink);
+  const { glyph: _glyph, ...placement } = fitted;
+  if (!settings.variation && !Object.values(scaleInsets(settings.padding)).some(Boolean)) Object.assign(placement, ink);
+  return { ...placement, reference: { ...reference }, kind: "printed" };
 }
 export function expandBox(box: Box, inset: Insets): Box {
   return { x: box.x - inset.left, y: box.y - inset.top, width: box.width + inset.left + inset.right, height: box.height + inset.top + inset.bottom };
@@ -82,7 +94,7 @@ export function placeGlyph(cell: Box, label: string, glyph: WritingGlyph | undef
   const x = clamp(reference.x + (reference.width - w) / 2, box.x, box.width, w);
   const y = clamp(alignBottom ? reference.y + reference.height - h : reference.y + (reference.height - h) / 2, box.y, box.height, h);
   return { x: x + box.height * variation.dx, y,
-    width: w, height: h, angle: variation.angle, label, cell, reference: { ...reference }, content: box, outer: expandBox(cell, margin), padding, margin, ...(glyph ? { glyph } : {}) };
+      width: w, height: h, angle: variation.angle, label, kind: glyph ? "handwriting" : "missing", cell, reference: { ...reference }, content: box, outer: expandBox(cell, margin), padding, margin, ...(glyph ? { glyph } : {}) };
 }
 
 export function textTokens(input: string, aliases: ReadonlyMap<string, WritingGlyph>) {

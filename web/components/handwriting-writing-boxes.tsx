@@ -1,6 +1,6 @@
 "use client";
 
-import { MAX_SYMBOL_SPACING, type Box, type Insets, type WritingPlacement, type WritingResult } from "@/lib/handwriting-writing";
+import { glyphBounds, MAX_SYMBOL_SPACING, type Box, type Insets, type WritingPlacement, type WritingResult } from "@/lib/handwriting-writing";
 import { Latex } from "./handwriting-review";
 import styles from "./handwriting-writing.module.css";
 
@@ -8,6 +8,23 @@ const sides = ["top", "right", "bottom", "left"] as const;
 const n = (value: number) => value.toFixed(1);
 const dimensions = (box: Box) => `${n(box.width)} × ${n(box.height)} px`;
 const rectPath = (box: Box) => `M${box.x},${box.y}h${box.width}v${box.height}h${-box.width}Z`;
+type Preview = Pick<WritingResult, "svg" | "width" | "height" | "origin" | "placements">;
+
+/** Give inspection overlays room outside the image without changing the image,
+ * its coordinates or the exported dimensions. */
+export function WritingPreview({ result, alt, selected, onSelect, boxes = false, references = false }: { result: Preview; alt: string; selected: number | null; onSelect: (index: number) => void; boxes?: boolean; references?: boolean }) {
+  const bounds = result.placements.flatMap(p => [...(boxes ? [p.outer, p.cell, glyphBounds(p, p.angle)] : []), ...(references ? [p.reference] : [])]);
+  const left = bounds.length ? Math.max(0, -Math.min(...bounds.map(b => b.x + result.origin.x)) + 2) : 0;
+  const top = bounds.length ? Math.max(0, -Math.min(...bounds.map(b => b.y + result.origin.y)) + 2) : 0;
+  const right = bounds.length ? Math.max(0, Math.max(...bounds.map(b => b.x + b.width + result.origin.x)) - result.width + 2) : 0;
+  const bottom = bounds.length ? Math.max(0, Math.max(...bounds.map(b => b.y + b.height + result.origin.y)) - result.height + 2) : 0;
+  return <div className={styles.resultCanvas} style={{ width: result.width + left + right, height: result.height + top + bottom }}>
+    <div style={{ position: "absolute", left, top, width: result.width, height: result.height }}>
+      <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.svg)}`} width={result.width} height={result.height} style={{ width: result.width, height: result.height }} alt={alt} />
+      {(boxes || references) && <SymbolBoxes result={result} selected={selected} onSelect={onSelect} boxes={boxes} references={references} />}
+    </div>
+  </div>;
+}
 
 export function InsetControls({ label, value, onChange }: { label: string; value: Insets; onChange: (value: Insets) => void }) {
   const equal = sides.every((side) => value[side] === value.top);
@@ -39,7 +56,8 @@ export function SymbolBoxes({ result, selected, onSelect, boxes = true, referenc
         <rect x={p.x} y={p.y} width={p.width} height={p.height} className={styles.glyphOutline}
           transform={`rotate(${p.angle} ${p.x + p.width / 2} ${p.y + p.height / 2})`} /></>}
         {references && <rect {...p.reference} className={styles.referenceOutline} />}
-        <rect {...p.outer} fill="transparent" className={styles.boxTarget} />
+        <rect x={p.x - 2} y={p.y - 2} width={Math.max(6, p.width + 4)} height={Math.max(6, p.height + 4)} fill="transparent" className={styles.boxTarget}
+          transform={`rotate(${p.angle} ${p.x + p.width / 2} ${p.y + p.height / 2})`} />
       </g>)}
     </g>
   </svg>;
@@ -49,14 +67,16 @@ export function BoxInspector({ placement: p, boxes = true, references = false }:
   return <div className={styles.boxInfo}>
     <div className={styles.boxLegend} aria-label="Box legend">{boxes && <><span>Glyph</span><span>Cell</span><span>Padding</span><span>Margin</span></>}{references && <span className={styles.referenceLegend}>Reference bounds</span>}</div>
     {p && <div className={styles.inspector} aria-label="Selected symbol">
-      <Latex value={p.glyph?.latex ?? p.label} />
+      {p.kind === "prose" ? <code>{p.label}</code> : <Latex value={p.glyph?.latex ?? p.label} />}
       <dl>
+        <div><dt>Source</dt><dd>{p.kind === "prose" ? "Printed text" : p.kind === "structure" ? "Math structure" : p.glyph ? "Handwriting" : p.kind === "missing" ? "Placeholder" : "Printed"}</dd></div>
         <div><dt>Glyph</dt><dd>{dimensions(p)} · {n(p.angle)}°</dd></div>
         <div><dt>Cell</dt><dd>{dimensions(p.cell)}</dd></div>
         {references && <div><dt>Reference bounds</dt><dd>{dimensions(p.reference)} · {n(p.reference.x)}, {n(p.reference.y)} px</dd></div>}
-        <div><dt>Position</dt><dd>{n(p.cell.x)}, {n(p.cell.y)} px</dd></div>
-        <div><dt>Padding · T R B L</dt><dd>{sides.map((side) => n(p.padding[side])).join(" / ")} px</dd></div>
-        <div><dt>Margin · T R B L</dt><dd>{sides.map((side) => n(p.margin[side])).join(" / ")} px</dd></div>
+        <div><dt>Cell position</dt><dd>{n(p.cell.x)}, {n(p.cell.y)} px</dd></div>
+        <div><dt>Glyph position</dt><dd>{n(p.x)}, {n(p.y)} px</dd></div>
+        <div><dt>Applied padding · T R B L</dt><dd>{sides.map((side) => n(p.padding[side])).join(" / ")} px</dd></div>
+        <div><dt>Applied margin · T R B L</dt><dd>{sides.map((side) => n(p.margin[side])).join(" / ")} px</dd></div>
       </dl>
     </div>}
   </div>;
