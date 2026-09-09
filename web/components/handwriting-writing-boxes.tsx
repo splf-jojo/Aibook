@@ -26,7 +26,7 @@ export function InsetControls({ label, value, onChange }: { label: string; value
   </fieldset>;
 }
 
-export function SymbolBoxes({ result, selected, onSelect, boxes = true, references = false }: { result: WritingResult; selected: number | null; onSelect: (index: number) => void; boxes?: boolean; references?: boolean }) {
+export function SymbolBoxes({ result, selected, onSelect, boxes = true, references = false }: { result: Pick<WritingResult, "width" | "height" | "origin" | "placements">; selected: number | null; onSelect: (index: number) => void; boxes?: boolean; references?: boolean }) {
   return <svg className={styles.boxOverlay} width={result.width} height={result.height} viewBox={`0 0 ${result.width} ${result.height}`} role="group" aria-label="Symbol boxes">
     <g transform={`translate(${result.origin.x} ${result.origin.y})`}>
       {result.placements.map((p, i) => <g key={i} className={styles.boxItem} role="button" tabIndex={0}

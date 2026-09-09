@@ -17,7 +17,9 @@ export type WritingResult = {
   svg: string; width: number; height: number; missing: string[]; unsupported: string[];
   /** Math symbols kept as font outlines in canvas output; prose is excluded. */
   fontFallback?: string[];
-  preview?: { svg: string; width: number; height: number }; placements: WritingPlacement[]; origin: { x: number; y: number };
+  /** Inspection only: printed outlines are already included in svg. */
+  fontPlacements?: WritingPlacement[];
+  preview?: { svg: string; width: number; height: number; placements: WritingPlacement[]; origin: { x: number; y: number } }; placements: WritingPlacement[]; origin: { x: number; y: number };
 };
 
 export function scaleInsets(insets: Insets, scale = 1): Insets {

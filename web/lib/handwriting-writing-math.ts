@@ -4,8 +4,7 @@ import { invisibleMath, scaleInsets, type WritingGlyph, type WritingSettings } f
 const isToken = (node: MmlNode) => ["mi", "mn", "mo", "mtext"].includes(node.kind);
 const text = (node: MmlNode) => isToken(node) ? (node as AbstractMmlTokenNode).getText().replace(invisibleMath, "") : "";
 
-/** Give ordinary symbols a shared ascent/descent before MathJax layout.
- * Scripts and fractions retain their structure; large operators keep theirs. */
+/** Add requested margins to the natural MathJax metrics, without replacing them. */
 export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<string, WritingGlyph>, settings: WritingSettings, options: { preserveText?: boolean } = {}) {
   const margin = scaleInsets(settings.margin);
   const factory = root.factory;
@@ -14,8 +13,8 @@ export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<str
     const large = node.kind === "mo" && (node.attributes.get("largeop") || node.attributes.get("stretchy"));
     return factory.create("mpadded", {
       ...(margin.left + margin.right ? { width: `+${em(margin.left + margin.right)}` } : {}),
-      ...(large ? { ...(margin.top ? { height: `+${em(margin.top)}` } : {}), ...(margin.bottom ? { depth: `+${em(margin.bottom)}` } : {}) }
-        : { height: `${0.8 + margin.top / settings.size}em`, depth: `${0.2 + margin.bottom / settings.size}em` }),
+      ...(margin.top ? { height: `+${em(margin.top)}` } : {}),
+      ...(margin.bottom ? { depth: `+${em(margin.bottom)}` } : {}),
       lspace: em(margin.left), "data-writing-unit": "true", "data-writing-cell": large ? "ink" : "line",
     }, [node]);
   };
@@ -28,6 +27,8 @@ export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<str
       const value = text(node);
       if (!value.trim()) return node;
       if (node.kind === "mo" || Array.from(value).length === 1 || aliases.has(value)) return wrap(node);
+      // With no margins, keep font runs intact for exact printed layout.
+      if (options.preserveText && !aliases.size && !Object.values(margin).some(Boolean)) return wrap(node);
       // A number such as 123 must get three margins. Preserve the original
       // font variant when splitting a multi-letter upright token.
       const pieces = Array.from((node as AbstractMmlTokenNode).getText()).map((character) => {

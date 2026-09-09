@@ -17,6 +17,41 @@ export async function runWritingBrowserChecks() {
   const render = (source: string, canvas = true) => renderWriting(source, "latex", glyphs, settings, 690, canvas ? { target: "canvas" } : {});
   const svg = (result: WritingResult) => new DOMParser().parseFromString(result.svg, "image/svg+xml");
   const passed: string[] = [];
+  const outlines = (markup: string) => {
+    const host = document.createElement("div"); host.style.cssText = "position:fixed;left:0;top:0;visibility:hidden";
+    host.innerHTML = markup; document.body.append(host);
+    try {
+      const root = host.querySelector("svg")!, frame = root.getBoundingClientRect();
+      return [...root.querySelectorAll<SVGGraphicsElement>("path, rect:not([width='100%']), line, text")].map(element => {
+        const box = element.getBoundingClientRect();
+        return { shape: element.getAttribute("d") ?? element.tagName, x: box.x - frame.x, y: box.y - frame.y, width: box.width, height: box.height };
+      }).filter(p => p.width > 0 && p.height > 0).sort((a, b) => a.shape.localeCompare(b.shape) || a.x - b.x || a.y - b.y);
+    } finally { host.remove(); }
+  };
+  for (const size of [20, 48, 96]) for (const formula of [String.raw`\sin x-\cos y+123=6`, String.raw`\frac{x+1}{y-2}`, String.raw`x_1^2+y^{n+1}`, String.raw`\frac{x_1^2+1}{\frac{y}{2}}`, "-"]) {
+    const printed = renderWriting(formula, "latex", [], { ...settings, size }, 690, { readable: true });
+    const preview = printed.preview!;
+    assert(Math.abs(printed.width - preview.width) < 0.001 && Math.abs(printed.height - preview.height) < 0.001,
+      `Printed frame equals preview: ${formula}, ${size}: ${printed.width}×${printed.height} vs ${preview.width}×${preview.height}`);
+    assert(Math.abs(printed.origin.x) < 0.001 && Math.abs(printed.origin.y) < 0.001, `No unsolicited outside offset: ${formula}: ${JSON.stringify(printed.origin)}`);
+    const upper = outlines(preview.svg), lower = outlines(printed.svg);
+    assert(upper.length === lower.length, `Same printed outlines: ${formula}: ${upper.length} vs ${lower.length}; ${lower.map(p => p.shape.slice(0, 20)).join("|")}`);
+    upper.forEach((p, i) => {
+      assert(p.shape === lower[i].shape, `Same printed shape: ${formula}`);
+      for (const key of ["x", "y", "width", "height"] as const) assert(Math.abs(p[key] - lower[i][key]) < 0.003, `Same ${key}: ${formula}, ${size}: ${p[key]} vs ${lower[i][key]}`);
+    });
+    assert(preview.placements.length > 0, "Preview exposes independently measured boxes");
+    const changed = renderWriting(formula, "latex", [], { ...settings, size, margin: { top: 4, right: 6, bottom: 4, left: 6 }, verticalScatter: 15 }, 690, { readable: true });
+    assert(changed.width > printed.width && changed.svg !== printed.svg, "Nonzero margins and scatter still apply");
+    assert(changed.preview!.svg === preview.svg, "Lower settings do not change upper preview");
+  }
+  passed.push("printed preview parity: simple math, fractions, scripts, nested fractions and minus at three sizes; preview boxes; nonzero spacing");
+  const plainHand = renderWriting("x+1", "latex", glyphs, settings, 690);
+  const paddedHand = renderWriting("x+1", "latex", glyphs, { ...settings, padding: { top: 5, right: 5, bottom: 5, left: 5 } }, 690);
+  const variedHand = renderWriting("x+1", "latex", glyphs, { ...settings, variation: 100 }, 690);
+  assert(paddedHand.placements.some((p, i) => p.width < plainHand.placements[i].width), "Nonzero handwriting padding still shrinks ink");
+  assert(variedHand.placements.some(p => p.angle !== 0), "Nonzero handwriting variation still rotates ink");
+  assert(plainHand.placements.every((p, i) => JSON.stringify(p.reference) === JSON.stringify(paddedHand.placements[i].reference)), "Padding does not redefine Reference bounds");
   const checkBounds = (result: WritingResult) => {
     assert(result.width > 0 && result.height > 0 && Number.isFinite(result.width + result.height), "Finite result bounds");
     for (const placement of result.placements) {

@@ -33,6 +33,8 @@ export function HandwritingWriting() {
   const [source, setSource] = useState("\\frac{dx}{dy}=x^2+\\sin x");
   const [settings, setSettings] = useState(DEFAULT_WRITING_SETTINGS);
   const [showReferences, setShowReferences] = useState(false);
+  const [showLatexBoxes, setShowLatexBoxes] = useState(false), [selectedLatexBox, setSelectedLatexBox] = useState<number | null>(null);
+  const [printed, setPrinted] = useState(false);
   const [readableAnswer, setReadableAnswer] = useState(false);
   const [showBoxes, setShowBoxes] = useState(false), [selectedBox, setSelectedBox] = useState<number | null>(null);
   const [result, setResult] = useState<WritingResult | null>(null), [rendering, setRendering] = useState(false), [exporting, setExporting] = useState(false);
@@ -69,19 +71,20 @@ export function HandwritingWriting() {
   useEffect(() => {
     let cancelled = false; setRenderError("");
     setSelectedBox(null);
+    setSelectedLatexBox(null);
     if (!source.trim()) { setResult(null); setRendering(false); return; }
     setRendering(true);
     const timer = window.setTimeout(async () => {
       try {
         const { renderWriting } = await import("@/lib/handwriting-writing-renderer");
         if (cancelled) return;
-        const value = renderWriting(source, mode, data?.glyphs ?? [], settings, width, { readable: readableAnswer });
+        const value = renderWriting(source, mode, printed && mode === "latex" ? [] : data?.glyphs ?? [], settings, width, { readable: printed || readableAnswer });
         if (!cancelled) setResult(value);
       } catch (err) { if (!cancelled) { setRenderError(message(err)); setResult(null); } }
       finally { if (!cancelled) setRendering(false); }
     }, 160);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [source, mode, data, settings, width, readableAnswer]);
+  }, [source, mode, data, settings, width, readableAnswer, printed]);
 
   async function download() {
     if (!result || rendering || exporting) return;
@@ -91,6 +94,8 @@ export function HandwritingWriting() {
     finally { setExporting(false); }
   }
   const unavailable = data && !data.glyphs.length;
+  const hasOutput = !!data?.glyphs.length || (printed && mode === "latex");
+  const inspectedResult = result ? { ...result, placements: [...result.placements, ...(result.fontPlacements ?? [])] } : null;
   return <main className={shared.app} lang="en">
     <header className={shared.topbar}>
       <Link href="/dev" className={shared.brand}><ArrowLeft size={17} />Dev</Link>
@@ -120,21 +125,26 @@ export function HandwritingWriting() {
         {unavailable && <div className={styles.notice}><span>{data.approved ? `${analysisLabels[data.status]}.` : "Dataset needs approval."}</span>
           <Link href={`/dev/dataset/${data.approved ? "analysis" : "labeling"}/${data.id}`} className={shared.secondaryButton}>{data.approved ? "Analysis" : "Review dataset"}</Link></div>}
         {renderError && <div role="alert" className={shared.error}>{renderError}</div>}
-        {!!data?.glyphs.length && !!result?.missing.length && <div className={styles.missing} role="status"><span>Missing symbols</span><div>{result.missing.map((label) => <code key={label}>{label}</code>)}</div></div>}
+        {!printed && !!data?.glyphs.length && !!result?.missing.length && <div className={styles.missing} role="status"><span>Missing symbols</span><div>{result.missing.map((label) => <code key={label}>{label}</code>)}</div></div>}
         {!!result?.unsupported.length && <div className={shared.error} role="status">Unsupported layout: {result.unsupported.join(", ")}</div>}
-        {mode === "latex" && <section className={styles.preview} aria-label="LaTeX preview"><h2>LaTeX</h2>
-          <div className={styles.paper} aria-busy={rendering}>{result?.preview && <img src={imageSource(result.preview.svg)} width={result.preview.width} height={result.preview.height} alt="LaTeX preview" />}</div>
+        {mode === "latex" && <section className={styles.preview} aria-label="LaTeX preview">
+          <div className={styles.outputHeading}><div><h2>LaTeX</h2><label className={styles.boxToggle}><input type="checkbox" checked={showLatexBoxes} onChange={(e) => setShowLatexBoxes(e.target.checked)} />Boxes</label></div></div>
+          <div className={styles.paper} aria-busy={rendering}>{result?.preview && <div className={styles.resultCanvas} style={{ width: result.preview.width, height: result.preview.height }}>
+            <img src={imageSource(result.preview.svg)} width={result.preview.width} height={result.preview.height} alt="LaTeX preview" />
+            {showLatexBoxes && !rendering && <SymbolBoxes result={result.preview} selected={selectedLatexBox} onSelect={setSelectedLatexBox} />}
+          </div>}</div>
+          {showLatexBoxes && result?.preview && !rendering && <BoxInspector placement={selectedLatexBox === null ? undefined : result.preview.placements[selectedLatexBox]} />}
         </section>}
         <section className={styles.preview} aria-label="Handwriting result">
-          <div className={styles.outputHeading}><div><h2>Handwriting</h2><label className={styles.boxToggle}><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />Boxes</label><label className={styles.boxToggle}><input type="checkbox" checked={showReferences} onChange={(e) => setShowReferences(e.target.checked)} />Reference bounds</label></div><div>
+          <div className={styles.outputHeading}><div><h2>Handwriting</h2>{mode === "latex" && <label className={styles.boxToggle}><input type="checkbox" checked={printed} onChange={(e) => setPrinted(e.target.checked)} />Printed</label>}<label className={styles.boxToggle}><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />Boxes</label><label className={styles.boxToggle}><input type="checkbox" checked={showReferences} onChange={(e) => setShowReferences(e.target.checked)} />Reference bounds</label></div><div>
             {(rendering || (datasetId && !data && !error)) && <LoaderCircle className={shared.spinner} size={17} role="status" aria-label="Rendering" />}
-            <button className={shared.iconButton} aria-label="Download PNG" title="Download PNG" onClick={() => void download()} disabled={!result || !data?.glyphs.length || rendering || exporting}><Download size={18} /></button>
+            <button className={shared.iconButton} aria-label="Download PNG" title="Download PNG" onClick={() => void download()} disabled={!result || !hasOutput || rendering || exporting}><Download size={18} /></button>
           </div></div>
-          <div className={styles.paper} aria-busy={rendering}>{result && !!data?.glyphs.length && <div className={styles.resultCanvas} style={{ width: result.width, height: result.height }}>
+          <div className={styles.paper} aria-busy={rendering}>{result && hasOutput && <div className={styles.resultCanvas} style={{ width: result.width, height: result.height }}>
             <img src={imageSource(result.svg)} width={result.width} height={result.height} alt="Handwriting result" />
-            {(showBoxes || showReferences) && !rendering && <SymbolBoxes result={result} selected={selectedBox} onSelect={setSelectedBox} boxes={showBoxes} references={showReferences} />}
+            {(showBoxes || showReferences) && inspectedResult && !rendering && <SymbolBoxes result={inspectedResult} selected={selectedBox} onSelect={setSelectedBox} boxes={showBoxes} references={showReferences} />}
           </div>}</div>
-          {(showBoxes || showReferences) && result && !!data?.glyphs.length && !rendering && <BoxInspector placement={selectedBox === null ? undefined : result.placements[selectedBox]} boxes={showBoxes} references={showReferences} />}
+          {(showBoxes || showReferences) && inspectedResult && hasOutput && !rendering && <BoxInspector placement={selectedBox === null ? undefined : inspectedResult.placements[selectedBox]} boxes={showBoxes} references={showReferences} />}
         </section>
       </div>
       <aside className={styles.sidebar} aria-label="Writing settings">
