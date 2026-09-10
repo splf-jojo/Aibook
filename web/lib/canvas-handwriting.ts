@@ -4,7 +4,7 @@ import type { WritingDataset, WritingSettings } from "./handwriting-writing.ts";
 export type HandwritingChoice = "auto" | "font" | string;
 export type HandwritingSnapshot = {
   schemaVersion: 1;
-  rendererVersion: 1;
+  rendererVersion: 1 | 2;
   datasetId: string;
   datasetName: string;
   sourceVersion: number;

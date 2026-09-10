@@ -65,7 +65,7 @@ export async function createDataset(input: unknown, actor: Identity, source?: un
 
 export async function catalog(actor: Identity): Promise<DatasetSummary[]> {
   const { rows } = await pool.query(`SELECT d.summary, d.owner_id, u.username, j.status AS analysis_status,
-    (SELECT p.id FROM handwriting_publications p WHERE p.dataset_id=d.id AND p.source_version=d.version) AS publication_id
+    (SELECT p.id FROM handwriting_publications p WHERE p.dataset_id=d.id AND p.source_version=d.version ORDER BY p.renderer_version DESC LIMIT 1) AS publication_id
     FROM handwriting_datasets d JOIN users u ON u.id=d.owner_id
     LEFT JOIN handwriting_jobs j ON j.dataset_id=d.id AND j.source_version=d.version
     WHERE $1='dev' OR d.owner_id=$2 ORDER BY d.created_at DESC`, [actor.role, actor.id]);
@@ -115,7 +115,7 @@ export async function applyReviewAction(id: string, input: unknown, actor: Ident
 export async function analysisPreview(id: string, actor: Identity): Promise<AnalysisPreview> {
   const row = await datasetRow(id, actor);
   const job = (await pool.query("SELECT * FROM handwriting_jobs WHERE dataset_id=$1 AND source_version=$2", [id, row.version])).rows[0];
-  const publication = (await pool.query("SELECT id FROM handwriting_publications WHERE dataset_id=$1 AND source_version=$2", [id, row.version])).rows[0];
+  const publication = (await pool.query("SELECT id FROM handwriting_publications WHERE dataset_id=$1 AND source_version=$2 ORDER BY renderer_version DESC LIMIT 1", [id, row.version])).rows[0];
   const preview: AnalysisPreview = { id, name: row.name, sourceVersion: row.version, approved: Boolean(row.review.approvedAt),
     status: job?.status ?? "not-run", symbols: [], publicationId: publication?.id,
     ...(job?.error ? { error: job.error } : {}), ...(job?.progress ? { progress: job.progress } : {}) };
@@ -147,21 +147,24 @@ export async function publishDataset(id: string, expectedVersion: unknown, actor
   const preview = await analysisPreview(id, actor);
   if (!preview.approved || preview.sourceVersion !== expectedVersion || !["complete", "partial"].includes(preview.status)) throw new LibraryError("Analyze the current approved dataset before publishing.", 409);
   const { writingFromAnalysis } = await import("./handwriting-writing.server.ts");
-  const writing = await writingFromAnalysis(preview);
+  const [session, source] = await Promise.all([readDataset(id, actor), readSource(id, actor)]);
+  if (session.version !== preview.sourceVersion) throw new LibraryError("The review changed. Reload before publishing.", 409);
+  const writing = await writingFromAnalysis(preview, session.dataset, source);
   if (!writing.glyphs.length) throw new LibraryError("No handwriting symbols are ready.", 409);
   return transaction(async client => {
     const row = (await client.query("SELECT * FROM handwriting_datasets WHERE id=$1 FOR UPDATE", [id])).rows[0];
     if (row.version !== expectedVersion || !row.review.approvedAt) throw new LibraryError("The review changed. Reload before publishing.", 409);
-    const publicationId = hash(`published:${id}:${row.version}`);
-    const summary = { ...row.summary, id: publicationId, datasetId: id, sourceVersion: row.version, analysisStatus: preview.status, publicationId };
+    const rendererVersion = writing.rendererVersion ?? 1;
+    const publicationId = hash(`published:${id}:${row.version}${rendererVersion > 1 ? `:renderer-${rendererVersion}` : ""}`);
+    const summary = { ...row.summary, id: publicationId, datasetId: id, sourceVersion: row.version, rendererVersion, analysisStatus: preview.status, publicationId };
     const payload = await storeBlobs(client, id, { ...writing, id: publicationId });
-    await client.query("INSERT INTO handwriting_publications(id,dataset_id,source_version,published_by,payload,summary) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(dataset_id,source_version) DO NOTHING", [publicationId, id, row.version, actor.id, payload, summary]);
+    await client.query("INSERT INTO handwriting_publications(id,dataset_id,source_version,published_by,payload,summary,renderer_version) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(dataset_id,source_version,renderer_version) DO NOTHING", [publicationId, id, row.version, actor.id, payload, summary, rendererVersion]);
     return summary;
   });
 }
 export async function fontCatalog(): Promise<DatasetSummary[]> {
   // Show the latest publication of each source, while older IDs remain readable.
-  return (await pool.query("SELECT DISTINCT ON(dataset_id) summary FROM handwriting_publications ORDER BY dataset_id,source_version DESC")).rows.map(row => row.summary);
+  return (await pool.query("SELECT DISTINCT ON(dataset_id) summary FROM handwriting_publications ORDER BY dataset_id,source_version DESC,renderer_version DESC")).rows.map(row => row.summary);
 }
 export async function publishedFont(id: string): Promise<WritingDataset> {
   const row = (await pool.query("SELECT dataset_id,payload FROM handwriting_publications WHERE id=$1", [id])).rows[0];

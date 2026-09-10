@@ -1,4 +1,5 @@
 .content { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 48px; max-width: 1440px; margin: 0 auto; padding: 32px 32px 72px; align-items: start; }
+.app { scrollbar-gutter: stable; }
 .workspace { min-width: 0; }
 .sidebar { position: sticky; top: 24px; min-width: 0; padding: 6px 0 0 28px; border-left: 1px solid var(--line); max-height: calc(100dvh - 48px); overflow-y: auto; }
 .input { display: block; width: 100%; resize: vertical; min-height: 112px; max-height: 360px; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--ink); font: 16px/1.7 ui-monospace, monospace; }
@@ -32,6 +33,10 @@
 .cellOutline { fill: none; stroke: #4386bd; stroke-width: .9; }
 .glyphOutline { fill: none; stroke: #575265; stroke-width: .7; stroke-dasharray: 2 2; }
 .referenceOutline { fill: #b53c91; fill-opacity: .07; stroke: #b53c91; stroke-width: 1.2; stroke-dasharray: 5 2; }
+.baselineOutline { stroke: #bc5732; stroke-width: 1; stroke-dasharray: 5 2; }
+.axisOutline { stroke: #44877b; stroke-width: .7; stroke-dasharray: 1 3; }
+.boxLegend .baselineLegend::before { background: #bc5732; }
+.boxLegend .axisLegend::before { background: #44877b; }
 .boxItem[aria-pressed="true"] .referenceOutline, .boxItem:focus .referenceOutline { stroke-width: 2; }
 .boxItem[aria-pressed="true"] .cellOutline, .boxItem:focus .cellOutline { stroke: #174b84; stroke-width: 2; }
 .boxInfo { margin-top: 12px; color: var(--muted); font-size: 12px; }

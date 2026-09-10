@@ -12,7 +12,7 @@ export async function renderCanvasHandwriting(latex: string, dataset: WritingDat
     throw new Error("handwriting-not-ready");
   }
   const settings = { ...DEFAULT_WRITING_SETTINGS, size: fontSize, variation: 8, seed: formulaSeed(latex) };
-  const snapshot: HandwritingSnapshot = { schemaVersion: 1, rendererVersion: 1, datasetId: dataset.id,
+  const snapshot: HandwritingSnapshot = { schemaVersion: 1, rendererVersion: dataset.glyphs.some(g => g.metrics) ? 2 : 1, datasetId: dataset.id,
     datasetName: dataset.name, sourceVersion: dataset.sourceVersion, computedAt: dataset.computedAt,
     settings, color: "#000000", medoids: [], fontSymbols: [], fontOnly: false };
   if (latex.length > MAX_WRITING_LENGTH) {

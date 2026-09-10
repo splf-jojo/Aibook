@@ -7,13 +7,13 @@ import type { AbstractMmlNode, AbstractMmlTokenNode, MmlNode } from "mathjax-ful
 import "mathjax-full/js/input/tex/ams/AmsConfiguration.js";
 import { applyMathMargins } from "./handwriting-writing-math.ts";
 import {
-  expandBox, glyphBounds, invisibleMath, layoutText, MAX_WRITING_LENGTH, missingLabel, normalizeMathCharacter, placeGlyph, placePrintedGlyph, verticalScatter, ZERO_INSETS,
+  expandBox, glyphBounds, invisibleMath, layoutText, MAX_WRITING_LENGTH, missingLabel, normalizeMathCharacter, placeGlyph, placeNativeGlyph, placePrintedGlyph, verticalScatter, ZERO_INSETS,
   type Box, type WritingGlyph, type WritingPlacement, type WritingResult, type WritingSettings,
 } from "./handwriting-writing.ts";
 
 const adaptor = liteAdaptor();
 RegisterHTMLHandler(adaptor);
-type MathSpacing = { aliases: ReadonlyMap<string, WritingGlyph>; settings: WritingSettings; preserveText?: boolean };
+type MathSpacing = { aliases: ReadonlyMap<string, WritingGlyph>; settings: WritingSettings; preserveText?: boolean; native?: boolean };
 export type WritingRenderOptions = { target?: "writing" | "canvas"; readable?: boolean; printed?: boolean };
 const newDocument = (spacing?: MathSpacing) => {
   const input = new TeX({ packages: ["base", "ams"], maxBuffer: 4000, maxMacros: 200 });
@@ -113,7 +113,11 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
   if (input.length > MAX_WRITING_LENGTH) throw new Error(`Maximum ${MAX_WRITING_LENGTH} characters.`);
   const canvas = options.target === "canvas";
   const readable = canvas || options.readable === true || options.printed === true;
-  for (const glyph of glyphs) if (![glyph.width, glyph.height].every(n => Number.isFinite(n) && n > 0)) throw new Error(`Invalid glyph dimensions: ${glyph.latex}`);
+  for (const glyph of glyphs) {
+    if (![glyph.width, glyph.height].every(n => Number.isFinite(n) && n > 0)) throw new Error(`Invalid glyph dimensions: ${glyph.latex}`);
+    const m = glyph.metrics;
+    if (m && (m.version !== 1 || ![m.width, m.height, m.unitsPerEm].every(n => Number.isFinite(n) && n > 0) || !Number.isFinite(m.baseline))) throw new Error(`Invalid source metrics: ${glyph.latex}`);
+  }
   const aliases = glyphAliases(glyphs);
   if (mode === "text") {
     const layout = layoutText(input, aliases, settings, Math.max(100, availableWidth - (canvas ? settings.size * 0.7 : 0)));
@@ -127,7 +131,7 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
   sizeSvg(original);
   const preview = { svg: original.svg.outerHTML, width: original.viewBox[2] * scale, height: original.viewBox[3] * scale,
     placements: [] as WritingPlacement[], origin: { x: 0, y: 0 } };
-  const layout = svgDocument(input, { aliases, settings, preserveText: readable });
+  const layout = svgDocument(input, { aliases, settings, preserveText: readable, native: !options.printed });
   sizeSvg(layout);
   const { svg, viewBox: [vx, vy, vw, vh] } = layout;
   const host = document.createElement("div");
@@ -166,6 +170,9 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
       for (let i = 0; i < atoms.length; i++) {
         const atom = atoms[i], label = textOf(atom);
         if (!label.trim()) continue;
+        if (atom.hasAttribute("data-writing-structure")) {
+          units.push({ elements: [atom], metric: atom, label, kind: "structure" }); continue;
+        }
         if (readable && atom.getAttribute("data-mml-node") === "mtext") {
           units.push({ elements: [atom], metric: atom, label, kind: "prose" }); continue;
         }
@@ -205,7 +212,7 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
       const cell = line ? { ...box, y: baseline - em * 0.8, height: em } : box;
       const operator = /^[+−=±×÷·<>≤≥≠-]$/.test(unit.label);
       const reference = line && !operator && box.y + box.height < baseline + em * 0.08 ? { ...box, y: baseline - box.height } : box;
-      return { box, cell, reference, fontScale, alignBottom: line && !operator };
+      return { box, cell, reference, fontScale, baseline, x: (m.e - view[0]) * scale, alignBottom: line && !operator };
     };
     const neutral = { ...settings, variation: 0, verticalScatter: 0, padding: ZERO_INSETS, margin: ZERO_INSETS };
     for (const unit of unitsOf(original.svg)) {
@@ -237,7 +244,10 @@ export function renderWriting(input: string, mode: "text" | "latex", glyphs: Wri
       const g = geometry(unit, svg, layout.viewBox);
       if (g.box.width <= 0 || g.box.height <= 0) return;
       const applied = unit.metric.closest("[data-writing-unit]") ? settings : { ...settings, margin: ZERO_INSETS };
-      const p = { ...placeGlyph(g.cell, unit.label, glyph, canvas ? placements.length : index, applied, g.fontScale, g.reference, g.alignBottom), kind: glyph ? "handwriting" as const : "missing" as const };
+      const nativeIndex = unit.metric.getAttribute("data-writing-native");
+      const p = { ...(glyph?.metrics && nativeIndex !== null
+        ? placeNativeGlyph(g.x, g.baseline, unit.label, glyph, Number(nativeIndex), applied, g.fontScale, g.reference)
+        : placeGlyph(g.cell, unit.label, glyph, canvas ? placements.length : index, applied, g.fontScale, g.reference, g.alignBottom)), kind: glyph ? "handwriting" as const : "missing" as const };
       placements.push(p); inspectionPlacements.push(p);
       if (!glyph) missing.add(missingLabel(unit.label));
     });

@@ -82,9 +82,12 @@ export function HandwritingWriting() {
     observer.observe(surface.current); return () => observer.disconnect();
   }, []);
   useEffect(() => {
+    // Opening the inspector can add a scrollbar and change the preview width.
+    // Keep the selection through that reflow and through size/spacing edits.
+    setSelectedBox(null); setSelectedLatexBox(null);
+  }, [source, mode, datasetKey, printedOnly, fontFallback]);
+  useEffect(() => {
     let cancelled = false; setExportError("");
-    setSelectedBox(null);
-    setSelectedLatexBox(null);
     if (!source.trim()) return;
     const timer = window.setTimeout(async () => {
       try {
@@ -109,7 +112,7 @@ export function HandwritingWriting() {
   const inspectedResult = result ? { ...result, placements: result.inspectionPlacements ?? result.placements } : null;
   const reportedSymbols = mode === "latex" && fontFallback ? result?.fontFallback : result?.missing;
   const outputTitle = printedOnly ? "Printed result" : result?.fontPlacements?.length ? (result.placements.some(p => p.glyph) ? "Mixed result" : "Printed result") : "Handwriting";
-  return <main className={shared.app} lang="en">
+  return <main className={`${shared.app} ${styles.app}`} lang="en">
     <header className={shared.topbar}>
       <Link href="/dev" className={shared.brand}><ArrowLeft size={17} />Dev</Link>
     </header>

@@ -322,6 +322,17 @@ python scripts/handwriting/build_candidates.py --notes C:\path\to\notes --manife
 
 ## Checks
 
+Native iPad writing uses original ink plus worksheet metrics. Transparent borders
+are trimmed with their page offset retained; normalization thumbnails only select
+the medoid. A single em calibration preserves relative size and stroke thickness.
+Historical baselines are estimated from accepted peer samples in matching cells;
+operators use the math axis. The inspector shows the baseline, axis and source size.
+For native glyphs padding increases the reserved space instead of shrinking ink.
+MathJax receives the real width/ascent/descent before laying out scripts, fractions,
+roots and rows. Stretchable delimiters remain structural font outlines. Legacy
+fonts keep their previous fitting. New publications require explicit Publish;
+existing published IDs remain immutable.
+
 ```powershell
 Set-Location web
 node tests/handwriting-dataset.test.mjs
@@ -329,8 +340,14 @@ node tests/handwriting-library.test.mjs
 node tests/handwriting-access.test.mjs
 node tests/handwriting-analysis.test.mjs
 node tests/handwriting-writing.test.mjs
+node tests/handwriting-native.test.mjs
 npm run typecheck
 ```
 
 Browser acceptance tests must use synthetic datasets. Never approve personal
 samples on the user's behalf.
+
+`tests/handwriting-native.browser.ts` covers tall/wide differentials, nested
+scripts, fractions, roots, delimiters, multiline text and canvas PNG snapshots.
+The Docker cloud integration additionally verifies renderer-version publication
+coexistence and idempotency using disposable synthetic datasets only.

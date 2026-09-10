@@ -54,7 +54,9 @@ export function SymbolBoxes({ result, selected, onSelect, boxes = true, referenc
         <rect {...p.outer} className={styles.marginOutline} />
         <rect {...p.cell} className={styles.cellOutline} />
         <rect x={p.x} y={p.y} width={p.width} height={p.height} className={styles.glyphOutline}
-          transform={`rotate(${p.angle} ${p.x + p.width / 2} ${p.y + p.height / 2})`} /></>}
+          transform={`rotate(${p.angle} ${p.x + p.width / 2} ${p.y + p.height / 2})`} />
+        {p.baseline !== undefined && <line x1={p.outer.x} x2={p.outer.x + p.outer.width} y1={p.baseline} y2={p.baseline} className={styles.baselineOutline} />}
+        {p.mathAxis !== undefined && <line x1={p.outer.x} x2={p.outer.x + p.outer.width} y1={p.mathAxis} y2={p.mathAxis} className={styles.axisOutline} />}</>}
         {references && <rect {...p.reference} className={styles.referenceOutline} />}
         <rect x={p.x - 2} y={p.y - 2} width={Math.max(6, p.width + 4)} height={Math.max(6, p.height + 4)} fill="transparent" className={styles.boxTarget}
           transform={`rotate(${p.angle} ${p.x + p.width / 2} ${p.y + p.height / 2})`} />
@@ -65,7 +67,7 @@ export function SymbolBoxes({ result, selected, onSelect, boxes = true, referenc
 
 export function BoxInspector({ placement: p, boxes = true, references = false }: { placement?: WritingPlacement; boxes?: boolean; references?: boolean }) {
   return <div className={styles.boxInfo}>
-    <div className={styles.boxLegend} aria-label="Box legend">{boxes && <><span>Glyph</span><span>Cell</span><span>Padding</span><span>Margin</span></>}{references && <span className={styles.referenceLegend}>Reference bounds</span>}</div>
+    <div className={styles.boxLegend} aria-label="Box legend">{boxes && <><span>Glyph</span><span>Cell</span><span>Padding</span><span>Margin</span>{p?.baseline !== undefined && <><span className={styles.baselineLegend}>Baseline</span><span className={styles.axisLegend}>Math axis</span></>}</>}{references && <span className={styles.referenceLegend}>Reference bounds</span>}</div>
     {p && <div className={styles.inspector} aria-label="Selected symbol">
       {p.kind === "prose" ? <code>{p.label}</code> : <Latex value={p.glyph?.latex ?? p.label} />}
       <dl>
@@ -75,6 +77,8 @@ export function BoxInspector({ placement: p, boxes = true, references = false }:
         {references && <div><dt>Reference bounds</dt><dd>{dimensions(p.reference)} · {n(p.reference.x)}, {n(p.reference.y)} px</dd></div>}
         <div><dt>Cell position</dt><dd>{n(p.cell.x)}, {n(p.cell.y)} px</dd></div>
         <div><dt>Glyph position</dt><dd>{n(p.x)}, {n(p.y)} px</dd></div>
+        {p.baseline !== undefined && <div><dt>Baseline</dt><dd>{n(p.baseline)} px</dd></div>}
+        {p.glyph?.metrics && <div><dt>Source size</dt><dd>{n(p.glyph.metrics.width)} × {n(p.glyph.metrics.height)} pt</dd></div>}
         <div><dt>Applied padding · T R B L</dt><dd>{sides.map((side) => n(p.padding[side])).join(" / ")} px</dd></div>
         <div><dt>Applied margin · T R B L</dt><dd>{sides.map((side) => n(p.margin[side])).join(" / ")} px</dd></div>
       </dl>

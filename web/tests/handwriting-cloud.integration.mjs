@@ -183,6 +183,41 @@ try {
   assert.deepEqual(originalPng, whitePng, "Original white PNG remains byte-for-byte intact");
   assert.deepEqual(await call(alice, `datasets/${darkId}/source`), source, "PencilKit archive is immutable");
   assert.equal((await call(alice, `datasets/${darkId}`)).fingerprint, darkRead.fingerprint);
+  // Native metrics get a new publication ID; old IDs and source reviews stay frozen.
+  const metricPng = await sharp(whitePng).resize(156, 156).png().toBuffer();
+  const metricImage = `data:image/png;base64,${metricPng.toString("base64")}`;
+  const metricSamples = darkNative.samples.map((sample, i) => ({ ...sample, image: metricImage, context: metricImage,
+    source: { ...sample.source, box: [i * 60, 20, 52, 52] } }));
+  const metricSource = { ...source, configuration: { version: 3, cellSize: 48 },
+    cells: metricSamples.map(sample => ({ id: sample.id, page: 1, box: [sample.source.box[0] + 2, 22, 48, 48] })) };
+  const metricId = (await call(alice, "datasets", "POST", { dataset: { ...darkNative, name: "Native metrics fixture", samples: metricSamples }, source: metricSource })).id;
+  let metricVersion = (await call(dev, `datasets/${metricId}`, "PATCH", { type: "accept-all", expectedVersion: 0 })).version;
+  metricVersion = (await call(dev, `datasets/${metricId}`, "PATCH", { type: "approve", expectedVersion: metricVersion })).version;
+  await call(dev, `datasets/${metricId}/analysis`, "POST", { expectedVersion: metricVersion });
+  for (let tries = 0; tries < 90; tries++) {
+    const analysis = await call(dev, `datasets/${metricId}/analysis`);
+    if (!["running", "queued"].includes(analysis.status)) { assert.equal(analysis.status, "complete"); break; }
+    await delay(1000);
+  }
+  const metricReview = await call(alice, `datasets/${metricId}`);
+  // Simulate the historical renderer-1 publication of this synthetic fixture.
+  const oldId = createHash("sha256").update(`published:${metricId}:${metricVersion}`).digest("hex");
+  const oldPayload = { ...font, id: oldId, name: "Frozen renderer-1 fixture", sourceVersion: metricVersion };
+  const oldSummary = { ...publication, id: oldId, publicationId: oldId, datasetId: metricId, sourceVersion: metricVersion };
+  await pool.query("INSERT INTO handwriting_publications(id,dataset_id,source_version,published_by,payload,summary,renderer_version) VALUES($1,$2,$3,$4,$5,$6,1)", [oldId, metricId, metricVersion, dev.id, oldPayload, oldSummary]);
+  const newPublication = await call(dev, `datasets/${metricId}/publish`, "POST", { expectedVersion: metricVersion });
+  const metricFont = await call(bob, `fonts/${newPublication.id}`);
+  assert.notEqual(newPublication.id, oldId);
+  assert.equal(metricFont.rendererVersion, 2);
+  assert.equal(metricFont.glyphs[0].metrics.version, 1);
+  assert.equal(metricFont.glyphs[0].width / metricFont.glyphs[0].metrics.width, 3);
+  assert.deepEqual(await call(bob, `fonts/${oldId}`), oldPayload);
+  assert.deepEqual(await call(alice, `datasets/${metricId}`), metricReview);
+  assert.equal((await call(dev, `datasets/${metricId}/publish`, "POST", { expectedVersion: metricVersion })).id, newPublication.id);
+  const catalogAfter = await call(bob, "fonts");
+  assert.ok(catalogAfter.some(item => item.id === newPublication.id));
+  assert.ok(!catalogAfter.some(item => item.id === oldId));
+  console.log("PASS: original native resolution and metrics; renderer-1 and renderer-2 publications coexist; repeat publish is idempotent; review and older publication unchanged.");
   console.log("PASS: account isolation, dev role, idempotent native/PDF upload, binary storage, concurrent review, persistent analysis, partial failures, immutable publications, and dark-mode native review/analysis with original PNG/PencilKit preservation.");
 } finally {
   const ids = accounts.map(account => account.id);

@@ -9,6 +9,7 @@ export type DatasetSummary = {
   publicationId?: string;
   datasetId?: string;
   sourceVersion?: number;
+  rendererVersion?: number;
   id: string;
   name: string;
   createdAt: string;

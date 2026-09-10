@@ -1,15 +1,22 @@
 import sharp from "sharp";
-import { analysisPreview } from "./handwriting-store.server.ts";
+import { analysisPreview, readDataset, readSource } from "./handwriting-store.server.ts";
+import { nativeWritingGlyphs } from "./handwriting-native.server.ts";
+import type { CandidateDataset } from "./handwriting-dataset.ts";
 import type { WritingDataset, WritingGlyph } from "./handwriting-writing.ts";
 import type { AnalysisPreview } from "./handwriting-library.ts";
 import type { Identity } from "./handwriting-access.server.ts";
 
 /** Only current, accepted medoids are served. Analysis keeps the other images. */
 export async function writingDataset(id: string, actor: Identity): Promise<WritingDataset> {
-  return writingFromAnalysis(await analysisPreview(id, actor));
+  const [analysis, session, source] = await Promise.all([analysisPreview(id, actor), readDataset(id, actor), readSource(id, actor)]);
+  if (session.version !== analysis.sourceVersion) throw new Error("Dataset changed. Reload before rendering.");
+  return writingFromAnalysis(analysis, session.dataset, source);
 }
-export async function writingFromAnalysis(analysis: AnalysisPreview): Promise<WritingDataset> {
+export async function writingFromAnalysis(analysis: AnalysisPreview, candidates?: CandidateDataset, source?: unknown): Promise<WritingDataset> {
   const glyphs: WritingGlyph[] = [];
+  const native = candidates ? await nativeWritingGlyphs(analysis, candidates, source) : null;
+  if (native) return { id: analysis.id, name: analysis.name, approved: analysis.approved, status: analysis.status, sourceVersion: analysis.sourceVersion,
+    ...(analysis.computedAt ? { computedAt: analysis.computedAt } : {}), rendererVersion: 2, glyphs: native };
   for (const symbol of analysis.symbols) {
     const result = symbol.result;
     if (result?.status !== "complete") continue;

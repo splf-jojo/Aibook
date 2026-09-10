@@ -97,6 +97,28 @@ approval and publication remain separate actions. Publication
 exposes neither the raw archive nor review.
 Published versions remain readable after later edits.
 
+Native worksheet publications use `rendererVersion: 2`. Each glyph keeps its
+original-resolution transparent PNG (`width`/`height` in pixels) and adds
+`metrics: {version:1,width,height,baseline,unitsPerEm,crop,cell,baselineMethod}`.
+Metric dimensions, baseline (from the cropped image's top), and `crop`/`cell`
+rectangles are in page points. One `unitsPerEm` calibrates the entire dataset;
+glyphs are never independently fitted into printed glyph bounds. MathJax lays
+out their real width/ascent/descent and applies its script-level scale to
+superscripts, subscripts and nested formulas. Padding reserves additional space
+without shrinking native ink. Version-1 publications retain their old behavior.
+
+`baselineMethod` is `worksheet-peers`, `math-axis`, or `estimated`. Historical
+iPad exports have no explicit baseline: accepted non-descending peer samples
+provide its estimate; math operators use the math axis. `crop` preserves the
+original page position even after transparent borders are trimmed. No original
+PNG, PencilKit archive or review decision is rewritten.
+
+Publish remains an explicit dev action. Publishing the same approved source
+with renderer 2 creates a new immutable publication ID, retaining renderer 1's
+ID and payload. Repeating Publish for the same source/renderer is idempotent.
+The font catalog selects the newest source version and then renderer version.
+Apply migration `20260910_0007` before deploying the updated web service.
+
 Errors are `{error:string}`: 401 requires sign-in, 403 denies a dev action,
 404 hides other owners' sources, 409 means stale review/missing approval,
 413 means oversized body. Analysis statuses include `queued`, `running`,

@@ -1,21 +1,35 @@
 import type { AbstractMmlNode, AbstractMmlTokenNode, MmlNode, TextNode } from "mathjax-full/js/core/MmlTree/MmlNode.js";
-import { invisibleMath, scaleInsets, type WritingGlyph, type WritingSettings } from "./handwriting-writing.ts";
+import { invisibleMath, nativeGlyphLayout, scaleInsets, type WritingGlyph, type WritingSettings } from "./handwriting-writing.ts";
 
 const isToken = (node: MmlNode) => ["mi", "mn", "mo", "mtext"].includes(node.kind);
 const text = (node: MmlNode) => isToken(node) ? (node as AbstractMmlTokenNode).getText().replace(invisibleMath, "") : "";
 
-/** Add requested margins to the natural MathJax metrics, without replacing them. */
-export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<string, WritingGlyph>, settings: WritingSettings, options: { preserveText?: boolean } = {}) {
+/** Native source metrics participate in MathJax layout; legacy fonts keep their metrics. */
+export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<string, WritingGlyph>, settings: WritingSettings, options: { preserveText?: boolean; native?: boolean } = {}) {
   const margin = scaleInsets(settings.margin);
   const factory = root.factory;
   const em = (px: number) => `${px / settings.size}em`;
-  const wrap = (node: MmlNode): MmlNode => {
+  let nativeIndex = 0;
+  const wrap = (node: MmlNode, label = text(node)): MmlNode => {
     const large = node.kind === "mo" && (node.attributes.get("largeop") || node.attributes.get("stretchy"));
+    const glyph = options.native === false ? undefined : aliases.get(label);
+    // Variable-height delimiters and radicals remain MathJax structures. Their
+    // required size depends on the complete expression, not one source cell.
+    const delimiter = /^[()[\]{}|√]$/.test(label) && node.kind === "mo" && node.attributes.get("stretchy");
+    if (glyph?.metrics && !delimiter) {
+      const index = nativeIndex++, n = nativeGlyphLayout(glyph, index, settings);
+      return factory.create("mpadded", {
+        width: em(n.advance), height: em(n.ascent + margin.top), depth: em(n.descent + margin.bottom),
+        lspace: em(margin.left), "data-writing-unit": "true", "data-writing-native": String(index),
+        "data-writing-text": label, "data-writing-cell": "native",
+      }, [node]);
+    }
     return factory.create("mpadded", {
       ...(margin.left + margin.right ? { width: `+${em(margin.left + margin.right)}` } : {}),
       ...(margin.top ? { height: `+${em(margin.top)}` } : {}),
       ...(margin.bottom ? { depth: `+${em(margin.bottom)}` } : {}),
       lspace: em(margin.left), "data-writing-unit": "true", "data-writing-cell": large ? "ink" : "line",
+      ...(glyph?.metrics && delimiter ? { "data-writing-structure": "true" } : {}),
     }, [node]);
   };
   const transform = (node: MmlNode): MmlNode => {
@@ -55,7 +69,7 @@ export function applyMathMargins(root: AbstractMmlNode, aliases: ReadonlyMap<str
           if (aliases.has(joined)) end = j;
         }
       }
-      if (end > i) { next.push(wrap(factory.create("mrow", {}, children.slice(i, end + 1)))); i = end; }
+      if (end > i) { const grouped = children.slice(i, end + 1); next.push(wrap(factory.create("mrow", {}, grouped), grouped.map(text).join(""))); i = end; }
       else next.push(transform(children[i]));
     }
     node.setChildren(next);

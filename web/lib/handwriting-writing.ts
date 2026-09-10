@@ -1,9 +1,15 @@
 import type { AnalysisStatus } from "./handwriting-analysis.ts";
 
-export type WritingGlyph = { latex: string; medoidId: string; image: string; width: number; height: number };
+/** Source dimensions in page points; image dimensions remain raster pixels. */
+export type NativeGlyphMetrics = {
+  version: 1; width: number; height: number; baseline: number; unitsPerEm: number;
+  crop: [number, number, number, number]; cell: [number, number, number, number];
+  baselineMethod: "worksheet-peers" | "math-axis" | "estimated";
+};
+export type WritingGlyph = { latex: string; medoidId: string; image: string; width: number; height: number; metrics?: NativeGlyphMetrics };
 export type WritingDataset = {
   id: string; name: string; approved: boolean; status: AnalysisStatus; sourceVersion: number;
-  computedAt?: string; glyphs: WritingGlyph[];
+  computedAt?: string; rendererVersion?: number; glyphs: WritingGlyph[];
 };
 export type Insets = { top: number; right: number; bottom: number; left: number };
 export const ZERO_INSETS: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -12,7 +18,7 @@ export type WritingSettings = { size: number; variation: number; verticalScatter
 export const DEFAULT_WRITING_SETTINGS: WritingSettings = { size: 48, variation: 0, verticalScatter: 0, letterSpacing: 3, lineSpacing: 1.7, seed: 1, padding: ZERO_INSETS, margin: ZERO_INSETS };
 export const MAX_WRITING_LENGTH = 2000;
 export type Box = { x: number; y: number; width: number; height: number };
-export type WritingPlacement = Box & { label: string; glyph?: WritingGlyph; kind?: "handwriting" | "printed" | "missing" | "structure" | "prose"; angle: number; cell: Box; reference: Box; content: Box; outer: Box; padding: Insets; margin: Insets };
+export type WritingPlacement = Box & { label: string; glyph?: WritingGlyph; kind?: "handwriting" | "printed" | "missing" | "structure" | "prose"; angle: number; cell: Box; reference: Box; content: Box; outer: Box; padding: Insets; margin: Insets; baseline?: number; mathAxis?: number };
 export type WritingResult = {
   svg: string; width: number; height: number; missing: string[]; unsupported: string[];
   /** Math symbols kept as font outlines in canvas output; prose is excluded. */
@@ -79,6 +85,33 @@ export function verticalScatter(index: number, settings: WritingSettings): numbe
   return ((value >>> 0) / 4294967295 * 2 - 1) * amount;
 }
 
+/** Shared by MathJax's layout pass and the final image pass. No per-glyph fit. */
+export function nativeGlyphLayout(glyph: WritingGlyph, index: number, settings: WritingSettings, fontScale = 1) {
+  const m = glyph.metrics!;
+  const em = settings.size * fontScale, scale = em / m.unitsPerEm;
+  const width = m.width * scale, height = m.height * scale, baseline = m.baseline * scale;
+  const variation = randomVariation(index, settings);
+  const rotated = glyphBounds({ x: 0, y: -baseline, width, height }, variation.angle);
+  const padding = scaleInsets(settings.padding, fontScale), margin = scaleInsets(settings.margin, fontScale);
+  const dx = em * variation.dx;
+  const left = Math.max(0, -rotated.x) + Math.abs(dx);
+  const right = Math.max(0, rotated.x + rotated.width - width) + Math.abs(dx);
+  const ascent = Math.max(0, -rotated.y) + padding.top;
+  const descent = Math.max(0, rotated.y + rotated.height) + padding.bottom;
+  const cellWidth = left + width + right + padding.left + padding.right;
+  return { width, height, baseline, angle: variation.angle, padding, margin, ascent, descent, cellWidth,
+    inkX: left + padding.left + dx, advance: cellWidth + margin.left + margin.right + settings.letterSpacing * fontScale };
+}
+
+export function placeNativeGlyph(x: number, baseline: number, label: string, glyph: WritingGlyph, index: number, settings: WritingSettings, fontScale = 1, reference?: Box): WritingPlacement {
+  const n = nativeGlyphLayout(glyph, index, settings, fontScale);
+  const cell = { x: x + n.margin.left, y: baseline - n.ascent, width: n.cellWidth, height: n.ascent + n.descent };
+  const ink = { x: cell.x + n.inkX, y: baseline - n.baseline, width: n.width, height: n.height };
+  return { ...ink, label, glyph, kind: "handwriting", angle: n.angle, cell, reference: reference ?? { ...ink },
+    content: { x: cell.x + n.padding.left, y: cell.y + n.padding.top, width: cell.width - n.padding.left - n.padding.right, height: cell.height - n.padding.top - n.padding.bottom },
+    outer: expandBox(cell, n.margin), padding: n.padding, margin: n.margin, baseline, mathAxis: baseline - settings.size * fontScale * 0.25 };
+}
+
 export function placeGlyph(cell: Box, label: string, glyph: WritingGlyph | undefined, index: number, settings: WritingSettings, fontScale = 1, reference: Box = cell, alignBottom = false): WritingPlacement {
   const requested = scaleInsets(settings.padding, fontScale), margin = scaleInsets(settings.margin, fontScale);
   // Keep a drawable interior even for thin operators or small scripts. Record
@@ -109,6 +142,7 @@ export function textTokens(input: string, aliases: ReadonlyMap<string, WritingGl
 }
 
 export function layoutText(input: string, aliases: ReadonlyMap<string, WritingGlyph>, settings: WritingSettings, availableWidth: number) {
+  if ([...aliases.values()].some(g => g.metrics)) return layoutNativeText(input, aliases, settings, availableWidth);
   const placements: WritingPlacement[] = [], missing = new Set<string>(), size = settings.size, margin = scaleInsets(settings.margin);
   const lineHeight = size * settings.lineSpacing + margin.top + margin.bottom;
   let x = 0, line = 0, maxX = 0;
@@ -130,4 +164,40 @@ export function layoutText(input: string, aliases: ReadonlyMap<string, WritingGl
     x += advance + settings.letterSpacing; maxX = Math.max(maxX, x);
   }
   return { placements, missing: [...missing], width: Math.max(1, maxX), height: (line + 1) * lineHeight };
+}
+
+function layoutNativeText(input: string, aliases: ReadonlyMap<string, WritingGlyph>, settings: WritingSettings, availableWidth: number) {
+  const placements: WritingPlacement[] = [], missing = new Set<string>();
+  const margin = scaleInsets(settings.margin), lines: { items: WritingPlacement[]; width: number; ascent: number; descent: number }[] = [];
+  const newLine = () => ({ items: [] as WritingPlacement[], width: 0, ascent: settings.size * 0.8, descent: settings.size * 0.2 });
+  let line = newLine(), x = 0;
+  const flush = () => { lines.push(line); line = newLine(); x = 0; };
+  for (const token of textTokens(input.replace(/\r\n?/g, "\n"), aliases)) {
+    if (token.text === "\n") { flush(); continue; }
+    if (/^\s+$/.test(token.text)) { x += settings.size * (token.text === "\t" ? 1.4 : 0.35); continue; }
+    const index = placements.length, scatter = verticalScatter(index, settings);
+    const n = token.glyph?.metrics ? nativeGlyphLayout(token.glyph, index, settings) : null;
+    const advance = n?.advance ?? settings.size * 0.55 + margin.left + margin.right + settings.letterSpacing;
+    if (x && x + advance > availableWidth) flush();
+    const p = n && token.glyph ? placeNativeGlyph(x, scatter, token.text, token.glyph, index, settings)
+      : placeGlyph({ x: x + margin.left, y: -settings.size * 0.8 + scatter, width: settings.size * 0.55, height: settings.size }, token.text, token.glyph, index, settings);
+    if (!token.glyph) missing.add(token.text);
+    placements.push(p); line.items.push(p);
+    line.ascent = Math.max(line.ascent, -p.outer.y, -glyphBounds(p, p.angle).y);
+    line.descent = Math.max(line.descent, p.outer.y + p.outer.height, glyphBounds(p, p.angle).y + glyphBounds(p, p.angle).height);
+    x += advance; line.width = Math.max(line.width, x);
+  }
+  flush();
+  let y = 0;
+  for (const row of lines) {
+    const dy = y + row.ascent;
+    for (const p of row.items) {
+      p.y += dy;
+      for (const key of ["cell", "reference", "content", "outer"] as const) p[key] = { ...p[key], y: p[key].y + dy };
+      if (p.baseline !== undefined) p.baseline += dy;
+      if (p.mathAxis !== undefined) p.mathAxis += dy;
+    }
+    y += Math.max(settings.size * settings.lineSpacing, row.ascent + row.descent + settings.size * 0.15);
+  }
+  return { placements, missing: [...missing], width: Math.max(1, ...lines.map(row => row.width)), height: Math.max(1, y) };
 }
