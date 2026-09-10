@@ -78,3 +78,12 @@
 @media (max-width: 480px) {
   .spacing > div { grid-template-columns: 1fr; }
 }
+.symbols { margin-top: 16px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.symbols summary { cursor: pointer; padding: 12px 0; }
+.symbols .coverage { border: 0; padding: 12px 0 20px; max-height: 220px; overflow: auto; }
+.spacing { border-top: 1px solid var(--line); margin-top: 18px; }
+.spacing summary { min-height: 44px; }
+.spacing > .inspectionControls { gap: 4px; grid-template-columns: 1fr; }
+.preview h2 { color: var(--ink); font-size: 14px; }
+.sidebar { top: 20px; }
+@media (max-width: 600px) { .input { font-size: 16px; } .settings { gap: 12px; } }

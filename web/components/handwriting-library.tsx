@@ -3,18 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, FileUp, LoaderCircle } from "lucide-react";
+import { FileUp, LoaderCircle } from "lucide-react";
 import { MAX_IMPORT_BYTES } from "@/lib/handwriting-dataset";
 import { importDataset, listDatasets, type DatasetSummary } from "@/lib/handwriting-library";
 import { analysisLabels } from "@/lib/handwriting-analysis";
 import styles from "./handwriting-review.module.css";
 import library from "./handwriting-library.module.css";
 
-export function DevNavigation() {
-  return <header className={styles.topbar}>
-    <Link href="/dev" className={styles.brand}><ArrowLeft size={17} />Dev</Link>
-  </header>;
-}
+import { DevNavigation, DevPage, samplesHref, symbolsHref, useDevNavigationGuard } from "./dev-workspace";
 
 const statuses = { unreviewed: "Unreviewed", "in-progress": "In progress", reviewed: "Reviewed", approved: "Approved" };
 
@@ -23,6 +19,7 @@ export function DatasetLibrary() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  useDevNavigationGuard(busy, "Wait for the dataset import to finish.");
   const input = useRef<HTMLInputElement>(null), locked = useRef(false);
   const router = useRouter();
   const refresh = useCallback(async () => {
@@ -39,13 +36,13 @@ export function DatasetLibrary() {
     try {
       if (file.size > MAX_IMPORT_BYTES) throw new Error("File is too large (40 MB maximum).");
       const result = await importDataset(JSON.parse(await file.text()));
-      router.push(`/dev/dataset/labeling/${result.id}`);
+      router.push(samplesHref(result.id));
     } catch (err) {
       setError(err instanceof SyntaxError ? "Invalid JSON file." : err instanceof Error ? err.message : "Could not add the dataset.");
     } finally { locked.current = false; setBusy(false); }
   }
 
-  return <main className={styles.app} lang="en">
+  return <DevPage viewKey="datasets" ready={!loading}>
     <DevNavigation />
     <div className={styles.libraryContent}>
       <div className={styles.libraryHeading}>
@@ -65,14 +62,14 @@ export function DatasetLibrary() {
       {!loading && <div className={styles.datasetList}>
         {items.map((item) => <div key={item.id} className={`${styles.datasetRow} ${library.row}`}>
           <div><span className={styles.datasetTitle}>{item.name}</span>
-            <span className={styles.datasetMeta}>{item.ownerName && `${item.ownerName} · `}{statuses[item.status]} · {item.total - item.pending} / {item.total} reviewed · {item.publicationId ? "Published" : analysisLabels[item.analysisStatus]}</span>
+            <span className={styles.datasetMeta}>{item.ownerName && `${item.ownerName} · `}{statuses[item.status]} · {item.total - item.pending} / {item.total} reviewed · {analysisLabels[item.analysisStatus]}{item.publicationId ? " · Published" : ""}</span>
           </div>
           <nav className={library.actions} aria-label={`${item.name} actions`}>
-            <Link href={`/dev/dataset/labeling/${item.id}`} className={styles.secondaryButton}>Labeling</Link>
-            <Link href={`/dev/dataset/analysis/${item.id}`} className={styles.secondaryButton}>Analysis</Link>
+            <Link href={samplesHref(item.id)} scroll={false} className={styles.secondaryButton}>Samples</Link>
+            <Link href={symbolsHref(item.id)} scroll={false} className={styles.secondaryButton}>Symbols</Link>
           </nav>
         </div>)}
       </div>}
     </div>
-  </main>;
+  </DevPage>;
 }

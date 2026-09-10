@@ -4,48 +4,51 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent } from "rea
 import { loadExperiment, updateExperiment } from "@/lib/handwriting-library";
 import type { Alignment, ControlPoint, ExperimentConfig, GlyphExperiment } from "@/lib/handwriting-experiment";
 import css from "./handwriting-experiment.module.css";
+import { useDevNavigationGuard, useDevViewState } from "./dev-workspace";
 
-export function HandwritingExperiment({ datasetId, latex, version, alignment, onPending }: {
-  datasetId: string; latex: string; version: number; alignment: Alignment; onPending: (latex: string, pending: boolean) => void;
+export function HandwritingExperiment({ datasetId, latex, version, alignment, generation, onPending }: {
+  datasetId: string; latex: string; version: number; alignment: Alignment; generation: string; onPending: (pending: boolean) => void;
 }) {
-  const host = useRef<HTMLTableCellElement>(null), mounted = useRef(true), locked = useRef(false);
-  const [visible, setVisible] = useState(false), [data, setData] = useState<GlyphExperiment | null>(null);
-  const [config, setConfig] = useState<ExperimentConfig | null>(null), [error, setError] = useState("");
-  const [busy, setBusy] = useState(false), [selected, setSelected] = useState<string | null>(null);
+  const mounted = useRef(true), locked = useRef(false);
+  const cacheKey = `experiment:${datasetId}:${version}:${generation}:${alignment}:${latex}`;
+  const [data, setData] = useDevViewState<GlyphExperiment | null>(`${cacheKey}:data`, null);
+  const [config, setConfig] = useDevViewState<ExperimentConfig | null>(`${cacheKey}:config`, null), [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useDevViewState<string | null>(`${cacheKey}:selected`, null);
   const drag = useRef<string | null>(null);
   const dirty = Boolean(data && config && JSON.stringify(data.config) !== JSON.stringify(config));
+  useDevNavigationGuard(dirty || busy);
   useEffect(() => {
     mounted.current = true;
-    const observer = new IntersectionObserver(entries => { if (entries.some(e => e.isIntersecting)) { setVisible(true); observer.disconnect(); } }, { rootMargin: "200px" });
-    if (host.current) observer.observe(host.current);
-    return () => { observer.disconnect(); mounted.current = false; };
+    return () => { mounted.current = false; };
   }, []);
   useEffect(() => {
-    onPending(latex, dirty || busy);
-    return () => onPending(latex, false);
-  }, [onPending, latex, dirty, busy]);
-  useEffect(() => {
-    if (!dirty && !busy) return;
-    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty, busy]);
+    onPending(dirty || busy);
+    return () => onPending(false);
+  }, [onPending, dirty, busy]);
   const reload = useCallback(async (signal?: AbortSignal) => {
     try {
       const result = await loadExperiment(datasetId, latex, version, alignment, signal);
-      if (mounted.current && !signal?.aborted) { setData(result); setConfig(result.config); setSelected(result.config.points[0]?.id ?? null); setError(""); }
+      if (mounted.current && !signal?.aborted) { setData(result); setConfig(result.config); setSelected(current => result.config.points.some(point => point.id === current) ? current : result.config.points[0]?.id ?? null); setError(""); }
     } catch (err) { if (mounted.current && !signal?.aborted) setError(err instanceof Error ? err.message : "Could not load experiment."); }
-  }, [datasetId, latex, version, alignment]);
-  useEffect(() => { if (!visible) return; const controller = new AbortController(); void reload(controller.signal); return () => controller.abort(); }, [reload, visible]);
+  }, [datasetId, latex, version, alignment, setData, setConfig, setSelected]);
+  useEffect(() => {
+    // Preserve an unfinished local edit when returning via browser history.
+    const controller = new AbortController();
+    if (!data || !config || JSON.stringify(data.config) === JSON.stringify(config)) void reload(controller.signal);
+    return () => controller.abort();
+    // Only fetch on entering this experiment; editing never triggers a reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reload]);
   const save = useCallback(async (action: "save" | "generate") => {
     if (!data || !config || locked.current) return;
     locked.current = true; setBusy(true); setError("");
     try {
       const result = await updateExperiment(datasetId, data, config, action);
-      if (mounted.current) { setData(result); setConfig(result.config); }
+      setData(result); setConfig(result.config);
     } catch (err) { if (mounted.current) setError(err instanceof Error ? err.message : "Could not save experiment."); }
     finally { locked.current = false; if (mounted.current) setBusy(false); }
-  }, [datasetId, data, config]);
+  }, [datasetId, data, config, setData, setConfig]);
   useEffect(() => {
     if (!dirty || busy || error || drag.current) return;
     const timer = window.setTimeout(() => void save("save"), 700);
@@ -74,16 +77,18 @@ export function HandwritingExperiment({ datasetId, latex, version, alignment, on
     patch({ points: [...config.points, { id, x, y, kind: "manual", movable: false }] }); setSelected(id);
   }
   const stale = data?.generatedWith && config && JSON.stringify(data.generatedWith) !== JSON.stringify(config);
-  return <>
-    <td ref={host} className={css.cell}>
+  return <div className={css.experiment}>
+    <section className={`${css.cell} ${css.threshold}`} aria-label="Mean and threshold">
+      <h2>Mean + threshold</h2>
       {data && config ? <>
         <img className={css.glyph} src={data.thresholdImage} width={data.width} height={data.height} alt={`${latex} thresholded mean`} />
         <label className={css.range}>Threshold <output>{Math.round(config.threshold * 100)}%</output>
           <input aria-label={`${latex} threshold`} type="range" min="5" max="95" step="1" value={Math.round(config.threshold * 100)} disabled={busy} onChange={e => patch({ threshold: Number(e.target.value) / 100 })} />
         </label>
-      </> : <span className={css.muted}>{visible && !error ? "Loading…" : "—"}</span>}
-    </td>
-    <td className={css.cell}>
+      </> : <span className={css.muted}>{!error ? "Loading…" : "—"}</span>}
+    </section>
+    <section className={`${css.cell} ${css.shape}`} aria-label="Mean shape editor">
+      <h2>Mean shape</h2>
       {data && config && <fieldset disabled={busy} className={css.controls}>
         <svg className={css.editor} viewBox={`0 0 ${data.width} ${data.height}`} aria-label={`${latex} control points`} onPointerDown={start}
           onPointerMove={event => { const pos = position(event); if (drag.current && pos && !busy) patch({ points: config.points.map(p => p.id === drag.current ? { ...p, ...pos } : p) }); }}
@@ -107,22 +112,17 @@ export function HandwritingExperiment({ datasetId, latex, version, alignment, on
           <button type="button" disabled={!point} onClick={() => { patch({ points: config.points.filter(p => p.id !== selected) }); setSelected(null); }}>Remove</button>
           <button type="button" onClick={() => { patch({ points: data.autoPoints.map(p => ({ ...p })) }); setSelected(data.autoPoints[0]?.id ?? null); }}>Auto</button>
         </div>
-        <button type="button" className={css.generate} disabled={!config.points.some(p => p.movable)} onClick={() => void save("generate")}>Augmentation</button>
       </fieldset>}
       {error && <div className={css.error} role="alert">{error}<div className={css.row}>
         {dirty && <button disabled={busy} onClick={() => void save("save")}>Retry save</button>}
         <button disabled={busy} onClick={() => void reload()}>Reload</button>
       </div></div>}
       {busy && <span className={css.muted} role="status">Saving…</span>}
-    </td>
-    <td className={css.cell}>
+    </section>
+    <section className={`${css.cell} ${css.augmentation}`} aria-label="Augmentation settings">
+      <h2>Augmentation</h2>
       {data && config && <>
-        <div className={css.variants} aria-label={`${latex} augmentation results`}>
-          {data.variants.map((variant, i) => <a key={i} href={variant.image} download={`${latex.replace(/[^a-zA-Z0-9]/g, "") || "glyph"}-${variant.seed}.png`} title={`Download · Seed ${variant.seed}`}><img src={variant.image} width={data.width} height={data.height} alt={`${latex} augmented variant ${i + 1}`} /></a>)}
-          {!data.variants.length && <span className={css.muted}>—</span>}
-        </div>
-        {stale && <div className={css.muted}>Previous settings</div>}
-        <details className={css.settings}><summary>Settings</summary><fieldset disabled={busy} className={css.controls}>
+        <fieldset disabled={busy} className={css.controls}>
           {([['strength', 'Strength', 0, 16], ['radius', 'Radius', 12, 96], ['count', 'Variants', 1, 12]] as const).map(([key, label, min, max]) => <label key={key} className={css.range}>{label}<output>{config.augmentation[key]}{key === "count" ? "" : " px"}</output>
             <input aria-label={`${latex} ${label.toLowerCase()}`} type="range" min={min} max={max} step="1" value={config.augmentation[key]} onChange={e => patch({ augmentation: { ...config.augmentation, [key]: Number(e.target.value) } })} />
           </label>)}
@@ -130,8 +130,18 @@ export function HandwritingExperiment({ datasetId, latex, version, alignment, on
             {["free", "up", "down", "left", "right", "horizontal", "vertical"].map(value => <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>)}
           </select></label>
           <label className={css.row}>Seed<input aria-label={`${latex} seed`} type="number" min="0" max="2147483647" value={config.augmentation.seed} onChange={e => patch({ augmentation: { ...config.augmentation, seed: Math.max(0, Math.min(2147483647, Math.round(Number(e.target.value)))) } })} /></label>
-        </fieldset></details>
+          <button type="button" className={css.generate} disabled={!config.points.some(p => p.movable)} onClick={() => void save("generate")}>Generate variants</button>
+          {!config.points.some(p => p.movable) && <span className={css.muted}>Choose a moving point.</span>}
+        </fieldset>
       </>}
-    </td>
-  </>;
+    </section>
+    <section className={`${css.cell} ${css.results}`} aria-label="Generated variants">
+      <h2>Variants</h2>
+      {stale && <div className={css.muted}>Previous settings · Generate again to update.</div>}
+      <div className={css.variants} aria-label={`${latex} augmentation results`}>
+        {data?.variants.map((variant, i) => <a key={i} href={variant.image} download={`${latex.replace(/[^a-zA-Z0-9]/g, "") || "glyph"}-${variant.seed}.png`} title={`Download PNG · Seed ${variant.seed}`} aria-label={`Download variant ${i + 1} PNG`}><img src={variant.image} width={data.width} height={data.height} alt={`${latex} augmented variant ${i + 1}`} /></a>)}
+        {!data?.variants.length && <span className={css.muted}>No variants</span>}
+      </div>
+    </section>
+  </div>;
 }

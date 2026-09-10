@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import katex from "katex";
-import { ArrowLeft, Check, Download, Home, LoaderCircle, Pencil, RotateCcw, X } from "lucide-react";
+import { Check, Download, LoaderCircle, Pencil, RotateCcw, X } from "lucide-react";
 import {
   datasetStats, exportDataset, MIN_EXAMPLES, type Candidate, type Decision, type ReviewIssue,
 } from "@/lib/handwriting-dataset";
 import { loadDataset, updateReview, type LibrarySession, type ReviewCommand, type ReviewUpdate } from "@/lib/handwriting-library";
 import styles from "./handwriting-review.module.css";
+import { DatasetHeader, DevNavigation, DevPage, symbolsHref, useDevNavigation, useDevNavigationGuard, useDevViewState } from "./dev-workspace";
 
 type Mode = "queue" | "gallery";
 type Filter = "all" | "pending" | "accepted" | "rejected";
@@ -40,17 +41,20 @@ function download(value: unknown, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function ReviewCard({ sample, decision, index, total, busy, onDecide, onUndo, canUndo }: {
+function ReviewCard({ sample, decision, index, total, busy, onDecide, onUndo, canUndo, draftKey }: {
+  draftKey: string;
   sample: Candidate; decision?: Decision; index: number; total: number; busy: boolean;
   onDecide: (status: Decision["status"], latex: string, issue?: ReviewIssue) => void; onUndo: () => void; canUndo: boolean;
 }) {
-  const [label, setLabel] = useState(decision?.latex ?? sample.latex);
+  const originalLabel = decision?.latex ?? sample.latex;
+  const [label, setLabel] = useDevViewState(draftKey, originalLabel);
   const [editing, setEditing] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [contextLoaded, setContextLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
   const valid = Boolean(label.trim()) && label.length <= 80 && math(label).valid;
   const canAccept = loaded && contextLoaded && !imageError && valid;
+  useDevNavigationGuard(label !== originalLabel, "Apply a decision or cancel the edited label before leaving.");
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -83,6 +87,7 @@ function ReviewCard({ sample, decision, index, total, busy, onDecide, onUndo, ca
       <input id="symbol-latex" aria-label="Symbol LaTeX" aria-invalid={!valid} autoFocus maxLength={80}
         value={label} onChange={(event) => setLabel(event.target.value)} disabled={busy} />
       <button className={styles.iconButton} type="submit" disabled={!valid || busy} aria-label="Done" title="Done"><Check size={18} /></button>
+      <button className={styles.iconButton} type="button" disabled={busy} aria-label="Cancel label edit" title="Cancel label edit" onClick={() => { setLabel(originalLabel); setEditing(false); }}><X size={18} /></button>
       {!valid && <span className={styles.inlineError}>Invalid LaTeX</span>}
     </form>}
     <div className={styles.sampleStage}>
@@ -116,16 +121,24 @@ function ReviewCard({ sample, decision, index, total, busy, onDecide, onUndo, ca
   </section>;
 }
 
-export function HandwritingReview({ datasetId }: { datasetId: string }) {
+export function HandwritingReview({ datasetId, initialSymbol, initialSample }: { datasetId: string; initialSymbol?: string; initialSample?: string }) {
   const [session, setSession] = useState<LibrarySession | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [mode, setMode] = useState<Mode>("queue");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<Filter>("all");
-  const [search, setSearch] = useState("");
-  const [visibleCount, setVisibleCount] = useState(60);
+  const viewKey = `samples:${datasetId}`;
+  const [mode, setMode] = useDevViewState<Mode>(`${viewKey}:mode`, "queue");
+  const [selectedId, setSelectedId] = useDevViewState<string | null>(`${viewKey}:selected`, null);
+  const [filter, setFilter] = useDevViewState<Filter>(`${viewKey}:filter`, "all");
+  const [search, setSearch] = useDevViewState(`${viewKey}:search`, "");
+  const [exactSymbol, setExactSymbol] = useDevViewState(`${viewKey}:exactSymbol`, false);
+  const [visibleCount, setVisibleCount] = useDevViewState(`${viewKey}:count`, 60);
+  const canNavigate = useDevNavigation();
+  useDevNavigationGuard(busy);
+  useEffect(() => {
+    if (initialSymbol !== undefined) { setSearch(initialSymbol); setExactSymbol(true); setFilter("all"); setMode("gallery"); setVisibleCount(60); }
+    if (initialSample !== undefined) { setSelectedId(initialSample); setMode("queue"); }
+  }, [initialSymbol, initialSample, setSearch, setExactSymbol, setFilter, setMode, setVisibleCount, setSelectedId]);
   const locked = useRef(false);
   const stats = useMemo(() => session ? datasetStats(session.dataset, session.review) : null, [session]);
   const sample = session?.dataset.samples.find((item) => item.id === selectedId)
@@ -137,7 +150,7 @@ export function HandwritingReview({ datasetId }: { datasetId: string }) {
       if (!active) return;
       if (saved) {
         setSession(saved);
-        if (!saved.dataset.samples.some((item) => !saved.review.decisions[item.id])) setMode("gallery");
+        if (!initialSample && !selectedId && !saved.dataset.samples.some((item) => !saved.review.decisions[item.id])) setMode("gallery");
       }
     }).catch(() => { if (active) setError("Could not load the dataset. Reload to try again."); })
       .finally(() => { if (active) setLoading(false); });
@@ -176,30 +189,30 @@ export function HandwritingReview({ datasetId }: { datasetId: string }) {
   const filtered = useMemo(() => session?.dataset.samples.filter((item) => {
     const decision = session.review.decisions[item.id];
     return (filter === "all" || (decision?.status ?? "pending") === filter)
-      && (decision?.latex ?? item.latex).toLowerCase().includes(search.trim().toLowerCase());
-  }) ?? [], [filter, search, session]);
+      && (exactSymbol ? (decision?.latex ?? item.latex) === search
+        : (decision?.latex ?? item.latex).toLowerCase().includes(search.trim().toLowerCase()));
+  }) ?? [], [filter, search, exactSymbol, session]);
 
-  return <main className={styles.app} lang="en">
-    <header className={styles.topbar}>
-      <Link href="/dev/dataset" className={styles.brand}><ArrowLeft size={17} />Datasets</Link>
+  return <DevPage viewKey={`${viewKey}:${mode}`} ready={!loading}>
+    <DevNavigation />
+    <DatasetHeader id={datasetId} name={session?.name} active="samples" />
+    <div className={styles.reviewToolbar}>
       {session && <nav className={styles.nav} aria-label="Review views">
         <button aria-current={mode === "queue" ? "page" : undefined}
-          onClick={() => { setMode("queue"); setSelectedId(null); }} disabled={busy}>Review</button>
+          onClick={() => { if (canNavigate()) setMode("queue"); }} disabled={busy}>Review</button>
         <button aria-current={mode === "gallery" ? "page" : undefined}
-          onClick={() => setMode("gallery")} disabled={busy}>All samples</button>
+          onClick={() => { if (canNavigate()) setMode("gallery"); }} disabled={busy}>All samples</button>
       </nav>}
       <div className={styles.tools}>
         {(busy || loading) && <LoaderCircle size={17} className={styles.spinner} role="status" aria-label={loading ? "Loading" : "Saving"} />}
-        <Link href="/dev" className={styles.iconButton} aria-label="Dev home" title="Dev home"><Home size={18} /></Link>
       </div>
-    </header>
-    {session && <h1 className={styles.datasetName}>{session.name}</h1>}
+    </div>
     <div className={mode === "gallery" && session ? styles.galleryContent : styles.content}>
       {error && <div className={styles.error} role="alert">{error}
         <button className={styles.secondaryButton} onClick={() => window.location.reload()}>Reload</button>
       </div>}
       {session && mode === "queue" && sample && <ReviewCard key={sample.id + ":" + session.review.revision} sample={sample}
-        decision={session.review.decisions[sample.id]} index={session.dataset.samples.findIndex((item) => item.id === sample.id)}
+        draftKey={`${viewKey}:draft:${sample.id}:${session.review.revision}`} decision={session.review.decisions[sample.id]} index={session.dataset.samples.findIndex((item) => item.id === sample.id)}
         total={session.dataset.samples.length} busy={busy} onDecide={onDecide} onUndo={undo} canUndo={session.review.history.length > 0} />}
 
       {session && mode === "queue" && !sample && <div className={styles.empty}>
@@ -208,6 +221,24 @@ export function HandwritingReview({ datasetId }: { datasetId: string }) {
       </div>}
 
       {session && stats && mode === "gallery" && <>
+        <div className={styles.galleryFooter} role="group" aria-label="Dataset actions">
+          <button className={styles.iconButton} onClick={undo} disabled={busy || !session.review.history.length}
+            aria-label="Undo last decision" title="Undo last decision"><RotateCcw size={17} /></button>
+          <span className={styles.finalCount}>{stats.pending ? "Remaining: " + stats.pending
+            : !stats.eligible.length ? "Need " + MIN_EXAMPLES + " accepted samples of one symbol"
+            : "For export: " + stats.exportable}</span>
+          <button className={styles.secondaryButton} disabled={busy || !stats.pending}
+            title="Accept all pending samples in this dataset"
+            onClick={() => void persist({ type: "accept-all" })}>Accept all</button>
+          {session.review.approvedAt && <Link href={symbolsHref(datasetId)} className={styles.secondaryButton}>Symbols →</Link>}
+          {session.review.approvedAt
+            ? <button className={styles.primaryButton} disabled={busy} onClick={() => {
+              try { download(exportDataset(session), "handwriting-approved-" + session.fingerprint.slice(0, 10) + ".json"); }
+              catch (err) { setError(err instanceof Error ? err.message : "Could not export the dataset."); }
+            }}><Download size={17} />Download JSON</button>
+            : <button className={styles.primaryButton} disabled={busy || stats.pending > 0 || !stats.eligible.length}
+              onClick={approve}>Approve dataset</button>}
+        </div>
         <div className={styles.galleryToolbar}>
           <div className={styles.filters} role="group" aria-label="Decision filter">
             {(["all", "pending", "accepted", "rejected"] as Filter[]).map((value) => <button key={value} aria-pressed={filter === value}
@@ -216,12 +247,13 @@ export function HandwritingReview({ datasetId }: { datasetId: string }) {
             </button>)}
           </div>
           <input aria-label="Search LaTeX" placeholder="LaTeX" value={search}
-            onChange={(event) => { setSearch(event.target.value); setVisibleCount(60); }} />
+            onChange={(event) => { setSearch(event.target.value); setExactSymbol(false); setVisibleCount(60); }} />
+          {exactSymbol && <button className={styles.secondaryButton} onClick={() => { setSearch(""); setExactSymbol(false); setVisibleCount(60); }} aria-label="Clear symbol filter">Symbol: <Latex value={search} /><X size={14} /></button>}
         </div>
         <details className={styles.coverage}>
           <summary>Symbols</summary>
           <div>{stats.coverage.map((group) => <button key={group.latex} className={group.accepted >= MIN_EXAMPLES ? styles.accepted : styles.pending}
-            onClick={() => { setSearch(group.latex); setFilter("all"); setVisibleCount(60); }}
+            onClick={() => { setSearch(group.latex); setExactSymbol(true); setFilter("all"); setVisibleCount(60); }}
             title={group.accepted >= MIN_EXAMPLES ? "Enough accepted samples" : "At least " + MIN_EXAMPLES + " accepted samples needed"}>
             <Latex value={group.latex} /><span>{group.accepted}/{MIN_EXAMPLES}</span>
           </button>)}</div>
@@ -246,24 +278,8 @@ export function HandwritingReview({ datasetId }: { datasetId: string }) {
         {!filtered.length && <p className={styles.noResults}>No samples</p>}
         {filtered.length > visibleCount && <button className={styles.secondaryButton}
           onClick={() => setVisibleCount((count) => count + 60)}>Show more</button>}
-        <footer className={styles.galleryFooter}>
-          <button className={styles.iconButton} onClick={undo} disabled={busy || !session.review.history.length}
-            aria-label="Undo last decision" title="Undo last decision"><RotateCcw size={17} /></button>
-          <span className={styles.finalCount}>{stats.pending ? "Remaining: " + stats.pending
-            : !stats.eligible.length ? "Need " + MIN_EXAMPLES + " accepted samples of one symbol"
-            : "For export: " + stats.exportable}</span>
-          <button className={styles.secondaryButton} disabled={busy || !stats.pending}
-            title="Accept all pending samples in this dataset"
-            onClick={() => void persist({ type: "accept-all" })}>Accept all</button>
-          {session.review.approvedAt
-            ? <button className={styles.primaryButton} disabled={busy} onClick={() => {
-              try { download(exportDataset(session), "handwriting-approved-" + session.fingerprint.slice(0, 10) + ".json"); }
-              catch (err) { setError(err instanceof Error ? err.message : "Could not export the dataset."); }
-            }}><Download size={17} />Download dataset</button>
-            : <button className={styles.primaryButton} disabled={busy || stats.pending > 0 || !stats.eligible.length}
-              onClick={approve}>Approve dataset</button>}
-        </footer>
+
       </>}
     </div>
-  </main>;
+  </DevPage>;
 }

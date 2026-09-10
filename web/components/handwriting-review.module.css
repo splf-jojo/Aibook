@@ -94,6 +94,14 @@
 .emptyLibrary { padding: 48px 0; text-align: center; color: var(--muted); }
 .emptyLibrary p { margin-bottom: 20px; }
 .app a.primaryButton, .app a.secondaryButton { text-decoration: none; }
+.app { --muted: #62685e; }
+.app :is(select, textarea):focus-visible { outline: 2px solid #4b6b50; outline-offset: 4px; }
+.app :is(select, textarea) { font: inherit; }
+.reviewToolbar { max-width: 1200px; margin: 0 auto; padding: 20px 32px 0; display: flex; justify-content: space-between; align-items: center; }
+.galleryContent { max-width: 1200px; padding-top: 16px; }
+.galleryFooter { top: 0; bottom: auto; z-index: 5; margin: 0 0 20px; border-top: 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.error { flex-wrap: wrap; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .reviewToolbar { padding: 16px 16px 0; } }
 .analysisToolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; min-height: 44px; margin-bottom: 28px; }
 .alignmentSwitch { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; }
 .alignmentSwitch button { min-height: 38px; padding: 8px 14px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; }

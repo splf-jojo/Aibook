@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Download, LoaderCircle, Shuffle } from "lucide-react";
+import { Download, LoaderCircle, Shuffle } from "lucide-react";
 import { listDatasets, loadWritingDataset, type DatasetSummary } from "@/lib/handwriting-library";
 import { DEFAULT_WRITING_SETTINGS, MAX_WRITING_LENGTH, type WritingDataset, type WritingResult } from "@/lib/handwriting-writing";
 import { analysisLabels } from "@/lib/handwriting-analysis";
@@ -11,6 +11,7 @@ import { Latex } from "./handwriting-review";
 import { BoxInspector, InsetControls, WritingPreview } from "./handwriting-writing-boxes";
 import shared from "./handwriting-review.module.css";
 import styles from "./handwriting-writing.module.css";
+import { DevNavigation, DevPage, samplesHref, symbolsHref, useDevViewState } from "./dev-workspace";
 
 const message = (error: unknown) => error instanceof Error ? error.message : "Something went wrong. Try again.";
 const latexPresets: Array<{ name: string; value: string }> = [
@@ -24,19 +25,22 @@ const latexPresets: Array<{ name: string; value: string }> = [
   { name: "Multiple lines", value: String.raw`\begin{aligned}y&=x^2+1\\\frac{dy}{dx}&=2x\end{aligned}` },
 ];
 
-export function HandwritingWriting() {
-  const [datasets, setDatasets] = useState<DatasetSummary[]>([]), [datasetId, setDatasetId] = useState("");
+export function HandwritingWriting({ initialDataset }: { initialDataset?: string } = {}) {
+  const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
+  const [datasetId, setDatasetId] = useDevViewState("writing:dataset", initialDataset ?? "");
+  useEffect(() => { if (initialDataset) setDatasetId(initialDataset); }, [initialDataset, setDatasetId]);
   const [loaded, setLoaded] = useState<{ key: string; value: WritingDataset } | null>(null), [loading, setLoading] = useState(true);
   const [catalogError, setCatalogError] = useState(""), [datasetError, setDatasetError] = useState<{ key: string; message: string } | null>(null);
   const [exportError, setExportError] = useState(""), [retryVersion, setRetryVersion] = useState(0);
-  const [mode, setMode] = useState<"text" | "latex">("latex");
-  const [sources, setSources] = useState({ latex: "\\frac{dx}{dy}=x^2+\\sin x", text: "" });
+  const [mode, setMode] = useDevViewState<"text" | "latex">("writing:mode", "latex");
+  const [sources, setSources] = useDevViewState("writing:sources", { latex: "\\frac{dx}{dy}=x^2+\\sin x", text: "" });
   const source = sources[mode], setSource = (value: string) => setSources(current => ({ ...current, [mode]: value }));
-  const [settings, setSettings] = useState(DEFAULT_WRITING_SETTINGS);
+  const [settings, setSettings] = useDevViewState("writing:settings", DEFAULT_WRITING_SETTINGS);
+  const [inspecting, setInspecting] = useDevViewState("writing:inspect", false);
   const [showReferences, setShowReferences] = useState(false);
   const [showLatexBoxes, setShowLatexBoxes] = useState(false), [selectedLatexBox, setSelectedLatexBox] = useState<number | null>(null);
-  const [printed, setPrinted] = useState(false);
-  const [fontFallback, setFontFallback] = useState(true);
+  const [printed, setPrinted] = useDevViewState("writing:printed", false);
+  const [fontFallback, setFontFallback] = useDevViewState("writing:fallback", true);
   const [showBoxes, setShowBoxes] = useState(false), [selectedBox, setSelectedBox] = useState<number | null>(null);
   const [rendered, setRendered] = useState<{ key: string; value?: WritingResult; error?: string } | null>(null), [exporting, setExporting] = useState(false);
   const [width, setWidth] = useState(800), surface = useRef<HTMLDivElement>(null), active = useRef(false), catalogRequest = useRef(0);
@@ -50,7 +54,7 @@ export function HandwritingWriting() {
         items.find((item) => item.analysisStatus === "complete")?.id ?? items[0]?.id ?? "");
     } catch (err) { if (active.current && request === catalogRequest.current) setCatalogError(message(err)); }
     finally { if (active.current && request === catalogRequest.current) setLoading(false); }
-  }, []);
+  }, [setDatasetId]);
   const selectedDataset = datasets.find(item => item.id === datasetId);
   const datasetKey = selectedDataset ? JSON.stringify([datasetId, selectedDataset.updatedAt, selectedDataset.sourceVersion, selectedDataset.analysisStatus, selectedDataset.status, retryVersion]) : "";
   const data = loaded?.key === datasetKey ? loaded.value : null;
@@ -112,10 +116,8 @@ export function HandwritingWriting() {
   const inspectedResult = result ? { ...result, placements: result.inspectionPlacements ?? result.placements } : null;
   const reportedSymbols = mode === "latex" && fontFallback ? result?.fontFallback : result?.missing;
   const outputTitle = printedOnly ? "Printed result" : result?.fontPlacements?.length ? (result.placements.some(p => p.glyph) ? "Mixed result" : "Printed result") : "Handwriting";
-  return <main className={`${shared.app} ${styles.app}`} lang="en">
-    <header className={shared.topbar}>
-      <Link href="/dev" className={shared.brand}><ArrowLeft size={17} />Dev</Link>
-    </header>
+  return <DevPage viewKey="writing" ready={!loading && !datasetPending && (!source.trim() || !!currentRender)} className={styles.app}>
+    <DevNavigation />
     <div className={styles.content}>
       <div className={styles.workspace}>
         <div className={shared.libraryHeading}><h1>Writing</h1>
@@ -133,29 +135,29 @@ export function HandwritingWriting() {
           <option value="" disabled>Examples</option>
           {latexPresets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name}</option>)}
         </select>}
-        {!printedOnly && hasHandwriting && <div className={styles.coverage} aria-label="Dataset symbols">{data!.glyphs.map((glyph) => <span key={glyph.latex} title={glyph.latex}>
+        {!printedOnly && hasHandwriting && <details className={styles.symbols} open={data!.glyphs.length <= 16}><summary>Available symbols · {data!.glyphs.length}</summary><div className={styles.coverage} aria-label="Dataset symbols">{data!.glyphs.map((glyph) => <span key={glyph.latex} title={glyph.latex}>
           <Latex value={glyph.latex} />
           <img className={styles.medoid} src={glyph.image} width={glyph.width} height={glyph.height} alt={`${glyph.latex} medoid`} />
-        </span>)}</div>}
+        </span>)}</div></details>}
         {(catalogError || loadError) && <div role="alert" className={shared.error}>{catalogError || loadError}<button className={shared.secondaryButton} onClick={() => { setRetryVersion(value => value + 1); void refresh(); }}>Retry</button></div>}
         {unavailable && <div className={styles.notice}><span>{data.approved ? (data.status === "complete" ? "No usable symbols." : `${analysisLabels[data.status]}.`) : "Dataset needs approval."}</span>
-          <Link href={`/dev/dataset/${data.approved ? "analysis" : "labeling"}/${data.id}`} className={shared.secondaryButton}>{data.approved ? "Analysis" : "Review dataset"}</Link></div>}
+          <Link href={data.approved ? symbolsHref(data.id) : samplesHref(data.id)} className={shared.secondaryButton}>{data.approved ? "Symbols" : "Review samples"}</Link></div>}
         {renderError && <div role="alert" className={shared.error}>{renderError}</div>}
         {exportError && <div role="alert" className={shared.error}>PNG export: {exportError}</div>}
         {!printedOnly && !!data?.glyphs.length && !!reportedSymbols?.length && <div className={styles.missing} role="status"><span>{mode === "latex" && fontFallback ? "Printed fallback" : "Missing symbols"}</span><div>{reportedSymbols.map((label) => <code key={label}>{label}</code>)}</div></div>}
         {!!result?.unsupported.length && <div className={shared.error} role="status">Unsupported layout: {result.unsupported.join(", ")}</div>}
         {mode === "latex" && <section className={styles.preview} aria-label="LaTeX preview">
-          <div className={styles.outputHeading}><div><h2>LaTeX</h2><label className={styles.boxToggle}><input type="checkbox" checked={showLatexBoxes} onChange={(e) => setShowLatexBoxes(e.target.checked)} />Boxes</label></div></div>
-          <div className={styles.paper} aria-busy={rendering}>{result?.preview && <WritingPreview result={result.preview} alt="LaTeX preview" boxes={showLatexBoxes && !rendering} selected={selectedLatexBox} onSelect={setSelectedLatexBox} />}</div>
-          {showLatexBoxes && result?.preview && !rendering && <BoxInspector placement={selectedLatexBox === null ? undefined : result.preview.placements[selectedLatexBox]} />}
+          <div className={styles.outputHeading}><h2>LaTeX</h2></div>
+          <div className={styles.paper} aria-busy={rendering}>{result?.preview && <WritingPreview result={result.preview} alt="LaTeX preview" boxes={inspecting && showLatexBoxes && !rendering} selected={selectedLatexBox} onSelect={setSelectedLatexBox} />}</div>
+          {inspecting && showLatexBoxes && result?.preview && !rendering && <BoxInspector placement={selectedLatexBox === null ? undefined : result.preview.placements[selectedLatexBox]} />}
         </section>}
         <section className={styles.preview} aria-label="Handwriting result">
-          <div className={styles.outputHeading}><div><h2>{outputTitle}</h2>{mode === "latex" && <label className={styles.boxToggle}><input type="checkbox" checked={printed} onChange={(e) => setPrinted(e.target.checked)} />Printed</label>}<label className={styles.boxToggle}><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} />Boxes</label><label className={styles.boxToggle}><input type="checkbox" checked={showReferences} onChange={(e) => setShowReferences(e.target.checked)} />Reference bounds</label></div><div>
+          <div className={styles.outputHeading}><h2>{outputTitle}</h2><div>
             {(rendering || datasetPending) && <LoaderCircle className={shared.spinner} size={17} role="status" aria-label="Rendering" />}
-            <button className={shared.iconButton} aria-label="Download PNG" title="Download PNG" onClick={() => void download()} disabled={!result || !hasOutput || rendering || exporting}><Download size={18} /></button>
+            <button className={shared.secondaryButton} aria-label="Download PNG" onClick={() => void download()} disabled={!result || !hasOutput || rendering || exporting}><Download size={16} />PNG</button>
           </div></div>
-          <div className={styles.paper} ref={surface} aria-busy={rendering}>{inspectedResult && hasOutput && <WritingPreview result={inspectedResult} alt={outputTitle === "Handwriting" ? "Handwriting result" : outputTitle} boxes={showBoxes && !rendering} references={showReferences && !rendering} selected={selectedBox} onSelect={setSelectedBox} />}</div>
-          {(showBoxes || showReferences) && inspectedResult && hasOutput && !rendering && <BoxInspector placement={selectedBox === null ? undefined : inspectedResult.placements[selectedBox]} boxes={showBoxes} references={showReferences} />}
+          <div className={styles.paper} ref={surface} aria-busy={rendering}>{inspectedResult && hasOutput && <WritingPreview result={inspectedResult} alt={outputTitle === "Handwriting" ? "Handwriting result" : outputTitle} boxes={inspecting && showBoxes && !rendering} references={inspecting && showReferences && !rendering} selected={selectedBox} onSelect={setSelectedBox} />}</div>
+          {inspecting && (showBoxes || showReferences) && inspectedResult && hasOutput && !rendering && <BoxInspector placement={selectedBox === null ? undefined : inspectedResult.placements[selectedBox]} boxes={showBoxes} references={showReferences} />}
         </section>
       </div>
       <aside className={styles.sidebar} aria-label="Writing settings">
@@ -164,9 +166,6 @@ export function HandwritingWriting() {
             {!datasets.length && <option value="">{loading ? "Loading…" : "No datasets"}</option>}
             {datasets.map((item) => <option key={item.id} value={item.id}>{item.name}{item.analysisStatus === "complete" ? "" : ` · ${analysisLabels[item.analysisStatus]}`}</option>)}
           </select></label>
-          {mode === "latex" && <label className={styles.dataset}><span>Missing symbols</span><select aria-label="Missing symbol display" value={printedOnly || fontFallback ? "printed" : "placeholder"} disabled={printedOnly} onChange={event => setFontFallback(event.target.value === "printed")}>
-            <option value="printed">Printed fallback</option><option value="placeholder">Placeholders</option>
-          </select></label>}
           <label className={styles.slider}><span>Size <output>{settings.size} px</output></span><input aria-label="Size" type="range" min={20} max={96} value={settings.size} onChange={(e) => setSettings((s) => ({ ...s, size: Number(e.target.value) }))} /></label>
           <div className={styles.variation}><label className={styles.slider}><span>Variation <output>{settings.variation}%</output></span><input aria-label="Variation" type="range" min={0} max={100} value={settings.variation} onChange={(e) => setSettings((s) => ({ ...s, variation: Number(e.target.value) }))} /></label>
             <button className={shared.iconButton} aria-label="Reshuffle variation" title="Reshuffle variation" disabled={!settings.variation && !settings.verticalScatter} onClick={() => setSettings((s) => ({ ...s, seed: s.seed + 1 }))}><Shuffle size={17} /></button>
@@ -181,7 +180,16 @@ export function HandwritingWriting() {
           <label className={styles.slider}><span>Line spacing <output>{settings.lineSpacing.toFixed(1)}</output></span><input aria-label="Line spacing" type="range" min={1.2} max={2.8} step={0.1} value={settings.lineSpacing} onChange={(e) => setSettings((s) => ({ ...s, lineSpacing: Number(e.target.value) }))} /></label>
           </>}
         </div><button className={shared.secondaryButton} onClick={() => setSettings((s) => ({ ...s, padding: DEFAULT_WRITING_SETTINGS.padding, margin: DEFAULT_WRITING_SETTINGS.margin, letterSpacing: DEFAULT_WRITING_SETTINGS.letterSpacing, lineSpacing: DEFAULT_WRITING_SETTINGS.lineSpacing }))}>Reset spacing</button></details>
+        {mode === "latex" && <details className={styles.spacing}><summary>Display</summary><div>
+          <label className={styles.boxToggle}><input type="checkbox" checked={printed} onChange={event => setPrinted(event.target.checked)} />Printed</label>
+          <label className={styles.dataset}><span>Missing symbols</span><select aria-label="Missing symbol display" value={printedOnly || fontFallback ? "printed" : "placeholder"} disabled={printedOnly} onChange={event => setFontFallback(event.target.value === "printed")}><option value="printed">Printed fallback</option><option value="placeholder">Placeholders</option></select></label>
+        </div></details>}
+        <details className={styles.spacing} open={inspecting} onToggle={event => setInspecting(event.currentTarget.open)}><summary>Inspect</summary><div className={styles.inspectionControls}>
+          {mode === "latex" && <label className={styles.boxToggle}><input type="checkbox" checked={showLatexBoxes} onChange={event => setShowLatexBoxes(event.target.checked)} />LaTeX boxes</label>}
+          <label className={styles.boxToggle}><input type="checkbox" checked={showBoxes} onChange={event => setShowBoxes(event.target.checked)} />Result boxes</label>
+          <label className={styles.boxToggle}><input type="checkbox" checked={showReferences} onChange={event => setShowReferences(event.target.checked)} />Reference bounds</label>
+        </div></details>
       </aside>
     </div>
-  </main>;
+  </DevPage>;
 }

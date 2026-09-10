@@ -51,11 +51,12 @@ export function DevSessionMonitor() {
   return null;
 }
 
-export function DevSignOut() {
+export function DevSignOut({ beforeSignOut }: { beforeSignOut?: () => boolean } = {}) {
   const router = useRouter(), [busy, setBusy] = useState(false), [error, setError] = useState("");
   return <div className={shared.tools}>
     {error && <span role="alert">{error}</span>}
     <button className={shared.secondaryButton} disabled={busy} onClick={async () => {
+      if (beforeSignOut && !beforeSignOut()) return;
       setBusy(true); setError("");
       try {
         const response = await fetch("/dev/session", { method: "DELETE", headers: { "Content-Type": "application/json" } });

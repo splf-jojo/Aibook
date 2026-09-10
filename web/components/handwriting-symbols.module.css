@@ -1,0 +1,35 @@
+.content { max-width: 1200px; margin: auto; padding: 24px 32px 64px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 24px; }
+.actions > span { margin-right: auto; color: var(--muted); font-size: 12px; }
+.tableScroll { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td { padding: 18px 12px; text-align: left; border-bottom: 1px solid var(--line); font-weight: 400; }
+.table thead th { color: var(--muted); font-size: 12px; }
+.table tbody th { width: 18%; }
+.table a { color: var(--ink); }
+.symbolLink { display: inline-flex; align-items: center; min-height: 44px; font-size: 25px; text-decoration: none; }
+.symbolLink:hover { color: #3e5543; }
+.thumbnail { display: block; width: 104px; height: 104px; object-fit: contain; background: #fff; }
+.state { color: var(--muted); font-size: 12px; max-width: 230px; overflow-wrap: anywhere; }
+.state a { display: block; width: fit-content; margin-top: 8px; }
+.symbolHeading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
+.symbolHeading a { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); min-height: 40px; text-decoration: none; }
+.symbolHeading label { display: flex; gap: 12px; align-items: center; }
+.symbolHeading select { max-width: 220px; min-height: 44px; border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; background: #fff; color: var(--ink); font: inherit; }
+.comparison { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 24px; margin-bottom: 20px; }
+.comparison figure { margin: 0; }
+.comparison figcaption { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.comparison img { width: 128px; height: 128px; object-fit: contain; background: #fff; }
+.sourceSamples { margin-top: 32px; border-top: 1px solid var(--line); padding-top: 12px; }
+.sourceSamples summary { padding: 12px 0; cursor: pointer; }
+.sourceSamples > a { display: inline-flex; margin-bottom: 16px; }
+.sourceSamples figure a { display: block; color: inherit; text-decoration: none; }
+@media (max-width: 650px) {
+  .content { padding: 20px 16px 48px; }
+  .table th, .table td { padding: 14px 8px; }
+  .table { min-width: 540px; }
+  .thumbnail { width: 80px; height: 80px; }
+  .actions > span { flex-basis: 100%; }
+  .symbolHeading label { width: 100%; }
+  .symbolHeading select { flex: 1; max-width: none; min-width: 0; }
+}
