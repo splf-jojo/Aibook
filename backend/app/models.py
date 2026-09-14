@@ -108,6 +108,8 @@ class CanvasDocument(Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     title: Mapped[str] = mapped_column(String(120))
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     group_id: Mapped[str | None] = mapped_column(
         ForeignKey("note_groups.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -118,3 +120,23 @@ class CanvasDocument(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="canvases")
+
+
+class VoiceDocument(Base):
+    __tablename__ = "voice_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    record: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    clips: Mapped[list["VoiceClip"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
+
+
+class VoiceClip(Base):
+    __tablename__ = "voice_clips"
+
+    record_id: Mapped[str] = mapped_column(ForeignKey("voice_records.id", ondelete="CASCADE"), primary_key=True)
+    file_name: Mapped[str] = mapped_column(String(40), primary_key=True)
+    data: Mapped[bytes] = mapped_column(LargeBinary)

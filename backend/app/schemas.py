@@ -363,12 +363,14 @@ class CanvasContent(CamelModel):
 
 
 class CanvasCreate(CamelModel):
+    id: str | None = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
     title: str = Field(min_length=1, max_length=120)
     content: CanvasContent = Field(default_factory=CanvasContent)
     group_id: str | None = Field(default=None, min_length=1, max_length=36)
 
 
 class CanvasUpdate(CamelModel):
+    base_revision: int | None = Field(default=None, ge=1)
     title: str | None = Field(default=None, min_length=1, max_length=120)
     content: CanvasContent | None = None
     group_id: str | None = Field(default=None, min_length=1, max_length=36)
@@ -381,6 +383,7 @@ class CanvasUpdate(CamelModel):
 
 
 class CanvasSummaryResponse(CamelModel):
+    revision: int
     id: str
     title: str
     group_id: str | None = None
@@ -390,6 +393,7 @@ class CanvasSummaryResponse(CamelModel):
 
 
 class CanvasResponse(CamelModel):
+    revision: int
     model_config = ConfigDict(
         alias_generator=to_camel,
         populate_by_name=True,

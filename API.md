@@ -26,6 +26,65 @@ Default token lifetime: `10080` minutes. Refresh token is not supported.
 `GET /api/auth/me` includes `role: "user" | "dev"`. Registration always creates
 `user`; role assignment is an explicit server command, not a profile field.
 
+## Selective notebook and voice synchronization
+
+New iPad notebooks and voice recordings are local-only. Enabling sync uploads that
+entry; its later changes retry after editing, reopening/refreshing the library or
+returning to the foreground. Disabling sync pauses this device; an existing server
+copy remains available. Voice recordings are independent of canvases; `noteID` and
+`noteTitle` are optional context, never a storage parent or cascade-delete link.
+
+All routes below require the account JWT and return only that account's data.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/subscription` | `{plan:"Free", usedBytes, limitBytes:50000000}` |
+| GET | `/api/canvases` | Each summary includes `revision` |
+| GET | `/api/canvases/{id}` | Content and current `revision` |
+| POST | `/api/canvases` | Existing body plus optional stable client UUID `id`; identical retries return the same entry (201) |
+| PATCH | `/api/canvases/{id}` | Existing fields plus **required** `baseRevision`; successful changes increment `revision` |
+| DELETE | `/api/canvases/{id}?baseRevision=N` | Reject deletion if the revision changed |
+| GET | `/api/voice-records` | `[{id,revision,record}]`, without audio blobs |
+| GET | `/api/voice-records/{id}` | `{id,revision,record,audio:[{fileName,data}]}` |
+| PUT | `/api/voice-records/{id}` | `{baseRevision,record,audio:[{fileName,data}]}`; `0` creates, positive revision replaces; returns `{id,revision,record}` (200) |
+| DELETE | `/api/voice-records/{id}?baseRevision=N` | Deletes the recording and audio atomically (204) |
+
+Voice `record` is the iPad manifest: UUID `id`, authenticated `ownerID`, `title`,
+`noteTitle`, optional `noteID`, numeric `createdAt` (seconds since 2001-01-01 UTC),
+`status`, `transcriptionStatus`, `clips:[{id,fileName,duration}]`,
+`transcript:[{id,start,end,text,isFinal}]`, optional `originalFileName`.
+Audio `data` is base64; names must be UUID + `.caf` or `.m4a` and match the clips
+exactly. Device sync fields are stripped before storage. Audio and manifest update
+in one transaction. Identical PUT retries do not add a revision or consume space.
+
+The Free quota is **50,000,000 bytes of current synchronized notebooks and voice
+recordings combined**, not upload traffic. Notebook usage is compact UTF-8 JSON
+(including embedded ink, image and PDF representations) plus its UTF-8 title.
+Voice usage is compact manifest JSON plus decoded audio bytes. Local-only entries,
+server/database overhead, AI chats, temporary image-transfer queues and handwriting
+dataset publications are outside this notebook/voice storage allowance. No paid
+plan or billing is introduced. Deletion releases space; replacement charges only
+the difference. A per-account PostgreSQL row lock serializes writes across both
+resource types, including concurrent uploads from different devices.
+
+- `409`, `detail.code=revision_conflict`: neither version is overwritten; response
+  includes the current `revision`. Keep the local changes pending. iPad's
+  «Сохранить обе версии» persists a separate local-only copy **before** fetching
+  the server version into the original entry.
+- `428`, `detail.code=revision_required`: old clients may read but must upgrade
+  before writing/deleting. Do not obtain a new revision and silently retry stale content.
+- `413`, `detail.code=storage_quota_exceeded`: includes `usedBytes`, `limitBytes`
+  and a user-readable message. Keep all local data and retry after freeing space.
+- `404`: missing or foreign-owned entry. iPad keeps the local copy; list refresh
+  never deletes it. Missing groups also never cause local notebook deletion.
+
+Migration `20260915_0008` preserves IDs/content, assigns revision 1 to existing
+canvases and backfills their usage. Accounts already above quota retain read access
+and can shrink/delete records. iPad's additive SwiftData/JSON fields preserve
+existing local files; old cached content without a known base revision is treated
+as pending, requiring explicit reconciliation before any overwrite. No history
+of server revisions is retained.
+
 ## Handwriting datasets and publications
 
 The Node web service implements these routes and verifies identity with FastAPI.

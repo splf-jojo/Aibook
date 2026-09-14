@@ -37,13 +37,13 @@ def test_group_lifecycle_and_note_membership_are_account_scoped():
         note_route = f'/api/canvases/{note["id"]}'
         assert note['groupId'] == group['id']
         # Old clients omit groupId in content/title saves; membership must survive.
-        assert client.patch(note_route, headers=owner, json={'title': 'Renamed', 'content': note['content']}).json()['groupId'] == group['id']
-        moved = client.patch(note_route, headers=owner, json={'groupId': None})
+        assert client.patch(note_route, headers=owner, json={'baseRevision': 1, 'title': 'Renamed', 'content': note['content']}).json()['groupId'] == group['id']
+        moved = client.patch(note_route, headers=owner, json={'baseRevision': 2, 'groupId': None})
         assert moved.status_code == 200 and moved.json()['groupId'] is None
-        assert client.patch(note_route, headers=owner, json={'groupId': group['id']}).status_code == 200
+        assert client.patch(note_route, headers=owner, json={'baseRevision': client.get(note_route, headers=owner).json()['revision'], 'groupId': group['id']}).status_code == 200
         foreign_group = client.post('/api/note-groups', headers=outsider, json={'name': 'Private'}).json()
-        assert client.patch(note_route, headers=owner, json={'groupId': foreign_group['id']}).status_code == 404
-        assert client.patch(note_route, headers=outsider, json={'groupId': foreign_group['id']}).status_code == 404
+        assert client.patch(note_route, headers=owner, json={'baseRevision': 4, 'groupId': foreign_group['id']}).status_code == 404
+        assert client.patch(note_route, headers=outsider, json={'baseRevision': 4, 'groupId': foreign_group['id']}).status_code == 404
         assert client.get('/api/canvases', headers=owner).json()[0]['groupId'] == group['id']
 
         assert client.delete(route, headers=owner).status_code == 204
@@ -51,7 +51,7 @@ def test_group_lifecycle_and_note_membership_are_account_scoped():
         assert kept['groupId'] is None
         assert kept['title'] == 'Renamed' and kept['content'] == note['content']
         assert client.get('/api/note-groups', headers=owner).json() == []
-        assert client.patch(note_route, headers=owner, json={'groupId': group['id']}).status_code == 404
+        assert client.patch(note_route, headers=owner, json={'baseRevision': client.get(note_route, headers=owner).json()['revision'], 'groupId': group['id']}).status_code == 404
 
 
 def test_pdf_background_survives_ink_edits_move_and_group_deletion():
@@ -71,11 +71,11 @@ def test_pdf_background_survives_ink_edits_move_and_group_deletion():
         route = f'/api/canvases/{note["id"]}'
         # A schema-2 client that predates PDF support must not erase backgrounds.
         old_content = {'schemaVersion': 2, 'pages': [{'id': page['id'], 'elements': [stroke]} for page in content['pages']]}
-        saved = client.patch(route, headers=headers, json={'content': old_content}).json()
+        saved = client.patch(route, headers=headers, json={'baseRevision': 1, 'content': old_content}).json()
         assert saved['content']['pdfData'] == pdf
         assert [page['pdfPageIndex'] for page in saved['content']['pages']] == [0, 1, None]
         assert all(page['elements'][0]['points'] == stroke['points'] for page in saved['content']['pages'])
-        client.patch(route, headers=headers, json={'groupId': group['id']})
+        client.patch(route, headers=headers, json={'baseRevision': 2, 'groupId': group['id']})
         assert client.delete(f'/api/note-groups/{group["id"]}', headers=headers).status_code == 204
         assert client.get(route, headers=headers).json()['content'] == saved['content']
         summaries = client.get('/api/canvases', headers=headers).json()

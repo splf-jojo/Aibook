@@ -352,6 +352,7 @@ def test_canvases_are_saved_updated_listed_and_private() -> None:
             headers=auth_header(alice_token),
             json={
                 "title": "Новая алгебра",
+                "baseRevision": canvas["revision"],
                 "content": {
                     "schemaVersion": 2,
                     "pages": [
@@ -378,7 +379,7 @@ def test_canvases_are_saved_updated_listed_and_private() -> None:
         ).status_code == 404
 
         deleted = client.delete(
-            f"/api/canvases/{canvas['id']}", headers=auth_header(alice_token)
+            f"/api/canvases/{canvas['id']}?baseRevision={updated.json()['revision']}", headers=auth_header(alice_token)
         )
         assert deleted.status_code == 204
         assert client.get(

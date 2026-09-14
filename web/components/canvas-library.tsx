@@ -239,7 +239,7 @@ export function CanvasLibrary({
       const response = await fetch(`${API_URL}/api/canvases/${id}`, {
         method: "PATCH",
         headers: apiHeaders(token, true),
-        body: JSON.stringify({ title }),
+        body: JSON.stringify({ title, baseRevision: canvases.find((item) => item.id === id)?.revision }),
       });
       if (handleAuthFailure(response)) return;
       if (!response.ok) throw new Error("canvas-rename-failed");
@@ -247,7 +247,7 @@ export function CanvasLibrary({
       setCanvases((current) =>
         current.map((canvas) =>
           canvas.id === id
-            ? { ...canvas, title: updated.title, updatedAt: updated.updatedAt }
+            ? { ...canvas, title: updated.title, updatedAt: updated.updatedAt, revision: updated.revision }
             : canvas,
         ),
       );
@@ -264,7 +264,7 @@ export function CanvasLibrary({
     setBusyId(id);
     setActionFailed(false);
     try {
-      const response = await fetch(`${API_URL}/api/canvases/${id}`, {
+      const response = await fetch(`${API_URL}/api/canvases/${id}?baseRevision=${canvases.find((item) => item.id === id)?.revision}`, {
         method: "DELETE",
         headers: apiHeaders(token),
       });
@@ -308,7 +308,7 @@ export function CanvasLibrary({
       if (handleAuthFailure(response)) return;
       if (!response.ok) throw new Error("group-delete-failed");
       setGroups((current) => current.filter((item) => item.id !== group.id));
-      setCanvases((current) => current.map((canvas) => canvas.groupId === group.id ? { ...canvas, groupId: null } : canvas));
+      await loadCanvases();
       setGroupFilter("all");
       setPendingDelete(null);
     } catch { setActionFailed(true); }
@@ -321,13 +321,13 @@ export function CanvasLibrary({
     setActionFailed(false);
     try {
       const response = await fetch(`${API_URL}/api/canvases/${id}`, {
-        method: "PATCH", headers: apiHeaders(token, true), body: JSON.stringify({ groupId }),
+        method: "PATCH", headers: apiHeaders(token, true), body: JSON.stringify({ groupId, baseRevision: canvases.find((item) => item.id === id)?.revision }),
       });
       if (handleAuthFailure(response)) return;
       if (!response.ok) throw new Error("canvas-move-failed");
       const updated = await response.json() as CanvasRecord;
       setCanvases((current) => current.map((canvas) => canvas.id === id
-        ? { ...canvas, groupId: updated.groupId, updatedAt: updated.updatedAt } : canvas));
+        ? { ...canvas, groupId: updated.groupId, updatedAt: updated.updatedAt, revision: updated.revision } : canvas));
       setMovingId(null);
     } catch { setActionFailed(true); }
     finally { setBusyId(null); }

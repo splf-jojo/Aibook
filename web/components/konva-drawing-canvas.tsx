@@ -624,6 +624,8 @@ export function KonvaDrawingCanvas({
   const initialPage = canvas.content.pages[0];
   const elementsRef = useRef<SceneElement[]>(initialPage.elements as SceneElement[]);
   const savedSnapshotRef = useRef(JSON.stringify(canvas.content.pages));
+  const serverRevisionRef = useRef(canvas.revision);
+  const [syncFailure, setSyncFailure] = useState<string | null>(null);
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const eraserPressTimerRef = useRef<number | null>(null);
   const eraserLongPressTriggeredRef = useRef(false);
@@ -786,6 +788,7 @@ export function KonvaDrawingCanvas({
           method: "PATCH",
           headers: apiHeaders(token, true),
           body: JSON.stringify({
+            baseRevision: serverRevisionRef.current,
             content: {
               schemaVersion: 2,
               pdfData: canvas.content.pdfData,
@@ -797,7 +800,14 @@ export function KonvaDrawingCanvas({
           onLogout();
           return false;
         }
-        if (!response.ok) throw new Error("canvas-save-failed");
+        if (!response.ok) {
+          const failure = await response.json().catch(() => null);
+          setSyncFailure(failure?.detail?.message ?? "Could not synchronize this notebook.");
+          throw new Error("canvas-save-failed");
+        }
+        const receipt = await response.json() as { revision: number };
+        serverRevisionRef.current = receipt.revision;
+        setSyncFailure(null);
         savedSnapshotRef.current = serialized;
         setSaveState(JSON.stringify(canvasPagesRef.current) === serialized ? "saved" : "saving");
         return true;
@@ -1932,6 +1942,7 @@ export function KonvaDrawingCanvas({
           </button>
           <div className="min-w-0">
             <div className="truncate text-sm font-medium text-[#111827]">{canvas.title}</div>
+            {syncFailure && <div role="alert" className="max-w-md text-xs text-red-500">{syncFailure}</div>}
             <div className={`text-xs ${saveState === "error" ? "text-red-500" : "text-[#697386]"}`}>
               {saveState === "saving"
                 ? text.saving

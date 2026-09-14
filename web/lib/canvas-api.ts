@@ -20,6 +20,7 @@ export type CanvasContent = {
 };
 
 export type CanvasSummary = {
+  revision: number;
   groupId?: string | null;
   id: string;
   title: string;
@@ -29,6 +30,7 @@ export type CanvasSummary = {
 };
 
 export type CanvasRecord = {
+  revision: number;
   groupId?: string | null;
   id: string;
   title: string;

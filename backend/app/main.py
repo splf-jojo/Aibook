@@ -16,6 +16,7 @@ from fastapi import (
     Form,
     HTTPException,
     Response,
+    Query,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -27,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
+from .storage_sync import router as sync_router, lock_account, check_quota, check_revision, json_bytes
 from .config import settings
 from .database import Base, SessionLocal, engine, get_session
 from .dependencies import get_current_user
@@ -91,6 +93,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Canvas Transfer API", lifespan=lifespan)
+app.include_router(sync_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_origins),
@@ -206,9 +209,10 @@ async def rename_note_group(group_id: str, payload: NoteGroupWrite, user: User =
 @app.delete("/api/note-groups/{group_id}", status_code=204)
 async def delete_note_group(group_id: str, user: User = Depends(get_current_user),
                             session: AsyncSession = Depends(get_session)):
+    await lock_account(session, user)
     group = await owned_note_group(group_id, user, session, lock=True)
     await session.execute(update(CanvasDocument).where(CanvasDocument.group_id == group_id)
-                          .values(group_id=None, updated_at=utc_now()))
+                          .values(group_id=None, updated_at=utc_now(), revision=CanvasDocument.revision + 1))
     await session.delete(group)
     await session.commit()
     return Response(status_code=204)
@@ -221,7 +225,7 @@ async def list_canvases(
 ) -> list[CanvasSummaryResponse]:
     # PDF source bytes are stored once in content, never loaded for the library.
     result = await session.execute(
-        select(CanvasDocument.id, CanvasDocument.title, CanvasDocument.group_id,
+        select(CanvasDocument.id, CanvasDocument.title, CanvasDocument.group_id, CanvasDocument.revision,
                CanvasDocument.created_at, CanvasDocument.updated_at,
                CanvasDocument.content["pages"].label("pages"),
                CanvasDocument.content["elements"].label("legacy_elements"))
@@ -231,6 +235,7 @@ async def list_canvases(
     return [
         CanvasSummaryResponse(
             id=canvas.id,
+            revision=canvas.revision,
             title=canvas.title,
             group_id=canvas.group_id,
             element_count=canvas_element_count({"pages": canvas.pages} if canvas.pages is not None
@@ -248,9 +253,23 @@ async def create_canvas(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> CanvasDocument:
+    await lock_account(session, user)
+    content = payload.content.model_dump(mode="json", by_alias=True)
+    if payload.id is not None:
+        existing = await session.get(CanvasDocument, payload.id)
+        if existing is not None:
+            if existing.user_id != user.id:
+                raise HTTPException(404)
+            if existing.title == payload.title and existing.content == content and existing.group_id == payload.group_id:
+                return existing
+            check_revision(0, existing.revision)
+    size = json_bytes(content) + len(payload.title.encode("utf-8"))
+    await check_quota(session, user, 0, size)
     if payload.group_id is not None:
         await owned_note_group(payload.group_id, user, session, lock=True)
     canvas = CanvasDocument(
+        id=payload.id,
+        size_bytes=size,
         user_id=user.id,
         title=payload.title,
         group_id=payload.group_id,
@@ -278,7 +297,10 @@ async def update_canvas(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> CanvasDocument:
+    await lock_account(session, user)
     canvas = await owned_canvas(canvas_id, user, session)
+    check_revision(payload.base_revision, canvas.revision)
+    old_size = canvas.size_bytes
     if "group_id" in payload.model_fields_set:
         if payload.group_id is not None:
             await owned_note_group(payload.group_id, user, session, lock=True)
@@ -296,6 +318,12 @@ async def update_canvas(
                 if "pdf_page_index" not in supplied.model_fields_set:
                     page["pdfPageIndex"] = old_pages.get(page["id"], {}).get("pdfPageIndex")
         canvas.content = content
+    size = json_bytes(canvas.content) + len(canvas.title.encode("utf-8"))
+    # Do not autoflush the candidate before checking its delta against stored usage.
+    with session.no_autoflush:
+        await check_quota(session, user, old_size, size)
+    canvas.size_bytes = size
+    canvas.revision += 1
     canvas.updated_at = utc_now()
     await session.commit()
     await session.refresh(canvas)
@@ -305,10 +333,13 @@ async def update_canvas(
 @app.delete("/api/canvases/{canvas_id}", status_code=204)
 async def delete_canvas(
     canvas_id: str,
+    base_revision: int | None = Query(None, alias="baseRevision", ge=1),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
+    await lock_account(session, user)
     canvas = await owned_canvas(canvas_id, user, session)
+    check_revision(base_revision, canvas.revision)
     await session.delete(canvas)
     await session.commit()
     return Response(status_code=204)
