@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Create .env.production and generate database/JWT secrets. "
-            "The Qwen API key is intentionally left empty."
+            "Provider API keys are intentionally left empty."
         )
     )
     parser.add_argument(
@@ -86,12 +86,12 @@ def main() -> int:
             f"Refusing to overwrite {output}. Use --force to rotate every secret."
         )
 
-    existing_qwen_key = ""
+    existing_keys = {"API_KEY": "", "OPENAI_API_KEY": ""}
     if output.exists():
         for line in output.read_text(encoding="utf-8-sig").splitlines():
-            if line.startswith("API_KEY="):
-                existing_qwen_key = line.partition("=")[2]
-                break
+            key, separator, value = line.partition("=")
+            if separator and key in existing_keys:
+                existing_keys[key] = value
 
     try:
         api_domain, cors_origin, host = normalize_public_address(args.public_url)
@@ -117,9 +117,12 @@ def main() -> int:
         "JWT_SECRET": secrets.token_hex(64),
         "ACCESS_TOKEN_MINUTES": "10080",
         "CORS_ORIGINS": cors_origin,
-        "API_KEY": existing_qwen_key,
+        "API_KEY": existing_keys["API_KEY"],
         "QWEN_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "QWEN_MODEL": "qwen3.8-flash",
+        "OPENAI_API_KEY": existing_keys["OPENAI_API_KEY"],
+        "OPENAI_REALTIME_URL": "wss://api.openai.com/v1/realtime",
+        "OPENAI_TRANSCRIPTION_MODEL": "gpt-realtime-whisper",
     }
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -134,10 +137,11 @@ def main() -> int:
 
     print(f"Created {output}")
     print(f"Public address: {api_domain}")
-    if existing_qwen_key:
-        print("Qwen API key: preserved from the existing file")
-    else:
-        print("Qwen API key: empty (set API_KEY later)")
+    for variable, provider in (("API_KEY", "Qwen"), ("OPENAI_API_KEY", "OpenAI")):
+        if existing_keys[variable]:
+            print(f"{provider} API key: preserved from the existing file")
+        else:
+            print(f"{provider} API key: empty (set {variable} later)")
     print("Secrets were written to the file and were not printed.")
     return 0
 

@@ -26,6 +26,30 @@ Default token lifetime: `10080` minutes. Refresh token is not supported.
 `GET /api/auth/me` includes `role: "user" | "dev"`. Registration always creates
 `user`; role assignment is an explicit server command, not a profile field.
 
+## Live transcription
+
+`WS /ws/transcriptions` is an authenticated, server-side proxy to OpenAI Realtime
+transcription. Send the account JWT in the WebSocket `Authorization: Bearer ...`
+header. The OpenAI key stays on the API server.
+
+The first client message is JSON:
+
+```json
+{"type":"start","recordId":"<uuid>","language":"en","startOffset":0}
+```
+
+After `{"type":"ready"}`, send raw PCM16 mono audio at 24 kHz as binary messages
+(at most one second per message). The server commits 15-second turns and emits
+`partial`, then `final` with `text` and `committedBytes`. Send `{"type":"stop"}`
+to commit the remaining audio; `complete` means every committed turn is final.
+Reconnect with the last `committedBytes` as `startOffset` and resend only the local
+audio after that offset. The maximum total recording length is 120 minutes.
+
+The server connects to OpenAI with `?intent=transcription` and configures
+`OPENAI_TRANSCRIPTION_MODEL` (default `gpt-realtime-whisper`) for English input.
+It does not generate an assistant answer. Finished audio and transcript are stored
+separately through the existing `PUT /api/voice-records/{id}` route.
+
 ## Selective notebook and voice synchronization
 
 New iPad notebooks and voice recordings are local-only. Enabling sync uploads that

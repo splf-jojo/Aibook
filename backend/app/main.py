@@ -29,6 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from .storage_sync import router as sync_router, lock_account, check_quota, check_revision, json_bytes
+from .transcription import router as transcription_router
 from .config import settings
 from .database import Base, SessionLocal, engine, get_session
 from .dependencies import get_current_user
@@ -94,6 +95,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Canvas Transfer API", lifespan=lifespan)
 app.include_router(sync_router)
+app.include_router(transcription_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_origins),

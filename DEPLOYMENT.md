@@ -83,7 +83,9 @@ node handwriting-snapshot.cjs import /tmp/handwriting.json.gz <local-owner> --lo
 
 ## Конфигурация
 
-Скрипт автоматически заполнит весь файл и сгенерирует пароль PostgreSQL и JWT-secret. `API_KEY` для Qwen намеренно останется пустым.
+Скрипт автоматически заполнит весь файл и сгенерирует пароль PostgreSQL и JWT-secret.
+`API_KEY` для Qwen и `OPENAI_API_KEY` для живой транскрипции намеренно останутся
+пустыми.
 
 Временная проверка через IP `8.218.46.154` без HTTPS:
 
@@ -99,7 +101,12 @@ python3 scripts/init-production-env.py \
   --acme-email admin@example.com
 ```
 
-Если `.env.production` уже существует, скрипт остановится. Флаг `--force` заменит пароль PostgreSQL и JWT-secret, поэтому используйте его только осознанно. Уже введённый `API_KEY` Qwen при этом сохраняется. После первой генерации вручную заполните только `API_KEY`, если AI-функции нужны.
+Если `.env.production` уже существует, скрипт остановится. Флаг `--force` заменит
+пароль PostgreSQL и JWT-secret, поэтому используйте его только осознанно. Уже
+введённые `API_KEY` и `OPENAI_API_KEY` при этом сохраняются. После первой генерации
+вручную заполните нужные ключи. Для Windows-субтитров нужен `OPENAI_API_KEY`;
+`OPENAI_TRANSCRIPTION_MODEL=gpt-realtime-whisper` уже задан по умолчанию. Ключ
+нельзя добавлять в Git или в Windows-сборку.
 
 ## Запуск
 

@@ -30,6 +30,13 @@ class Settings:
         "QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     ).rstrip("/")
     qwen_model: str = os.getenv("QWEN_MODEL", "qwen3.8-flash")
+    openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
+    openai_realtime_url: str = os.getenv(
+        "OPENAI_REALTIME_URL", "wss://api.openai.com/v1/realtime"
+    ).rstrip("/")
+    openai_transcription_model: str = os.getenv(
+        "OPENAI_TRANSCRIPTION_MODEL", "gpt-realtime-whisper"
+    )
 
 
 settings = Settings()
